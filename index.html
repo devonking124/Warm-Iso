@@ -2051,12 +2051,23 @@ class LevelCtx {
     const g = new Group(); g.position.set(x, y, z); this.group.add(g);
     const core = new Mesh(this.geo('fragCore', () => new OctahedronGeometry(0.075, 0)), this.mat('fragCore', () => new MeshBasicMaterial({ color: 0xffffff })));
     core.material.color.set(0xfff4dc);
-    const halo = new Sprite(this.mat('fragHalo', () => new SpriteMaterial({ map: this.tex('glow', () => TEX.glow()), color: this.fragColor, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0.9 })));
+    const halo = new Sprite(this.mat('fragHalo', () => new SpriteMaterial({ map: this.tex('glow', () => TEX.glow()), color: this.fragColor, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0.9, fog: false })));   // fog:false — a memory glows through the haze
     halo.scale.setScalar(0.95); g.add(core, halo);
+    // memories that appear later (after a puzzle step) also raise a column of light, so they can be seen from across the room
+    let beam = null;
+    if (o.hidden) {
+      const bb = new MeshBuilder(true, false), c = bb.rgb(0xffe6b0);
+      for (let k = 0; k < 2; k++) { bb.push(0, 0, 0, (k * Math.PI) / 2); const v0 = bb.vcount; bb.vert(-0.32, -1.0, 0, 0, 0, 1, 0, 0, c, 1, 0.6); bb.vert(0.32, -1.0, 0, 0, 0, 1, 1, 0, c, 1, 0.6); bb.vert(0.1, 6, 0, 0, 0, 1, 1, 1, c, 1, 0); bb.vert(-0.1, 6, 0, 0, 0, 1, 0, 1, c, 1, 0); bb.idx.push(v0, v0 + 1, v0 + 2, v0, v0 + 2, v0 + 3); bb.pop(); }
+      beam = bb.build(this.mat('beaconM', () => new MeshBasicMaterial({ vertexColors: true, transparent: true, blending: AdditiveBlending, depthWrite: false, side: DoubleSide, fog: false })));
+      beam.frustumCulled = false; beam.renderOrder = 3; g.add(beam);
+    }
     const sp = new GlowField(6, { fog: 0, opacity: 0.9 }); for (let k = 0; k < 6; k++) sp.add(0, 0, 0, 0.055, 0xfff0c0, 0.35, 0); sp.finished = true; sp.finish(); g.add(sp.mesh);
     const ent = { i, g, core, halo, base: new Vector3(x, y, z), got: false, hum: null, it: null, visible: true, phase: i * 2.1 };
     ent.hum = this.hum(g.position, mtof(degToMidi(this.theme, [2, 4, 7][i] + 7)), 0.11);
-    ent.show = (v = true) => { ent.visible = v && !ent.got; g.visible = ent.visible; if (ent.hum) ent.hum.setGain(ent.visible ? 0.11 : 0); if (v) { AudioSys.chime(mtof(degToMidi(this.theme, 9 + i)), 0.18); } };
+    ent.show = (v = true) => {
+      ent.visible = v && !ent.got; g.visible = ent.visible; if (ent.hum) ent.hum.setGain(ent.visible ? 0.11 : 0);
+      if (v && ent.visible) { const p = AudioSys.ok ? AudioSys.panner(g.position, 3, 0.35) : null; if (p) p.connect(AudioSys.busSfx); AudioSys.chime(mtof(degToMidi(this.theme, 9 + i)), 0.24, null, p); }   // the reveal chime comes from where the memory is
+    };
     ent.it = this.interact({ obj: g, r: o.r || 0.45, range: o.range ?? 3.5, label: o.label || 'Touch', enabled: () => ent.visible && !ent.got && (!o.locked || !o.locked()), onSelect: () => this.collect(ent) });
     this.updaters.push((dt, t) => {
       if (ent.got) return; g.position.y = ent.base.y + Math.sin(t * 1.4 + ent.phase) * 0.04; core.rotation.y += dt * 1.3; core.rotation.x = Math.sin(t * 0.7 + ent.phase) * 0.4;
@@ -2647,9 +2658,9 @@ Levels.register([{
     const halo = new Sprite(new SpriteMaterial({ map: L.tex('glow', () => TEX.glow()), color: 0xffd0a0, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0 })); halo.scale.setScalar(1.6); halo.position.set(LX, 1.6, LZ); L.add(halo);
     const bulbMesh = new Mesh(L.geo('bulbG', () => new SphereGeometry(0.06, 10, 8)), new MeshBasicMaterial({ color: 0xd9d2ba })); bulbMesh.position.set(G.cx(3) + 0.3, 0.075, G.cz(9) + 0.25); L.add(bulbMesh);
     bulb = L.body(bulbMesh, [0.06, 0.075, 0.06], { hold: 0.85, label: 'Hold to pull', pickHalf: [0.16, 0.16, 0.16], bounce: 0.35 });
-    L.slot(new Vector3(LX, 1.58, LZ), 0.8, null, () => {
+    L.slot(new Vector3(LX, 1.5, LZ), 1.25, null, () => {
       lampOn = true; bulb.obj.material.color.set(0xfff4d0); shadeMat.color.set(0xffd9a0); halo.material.opacity = 0.9; AudioSys.click2(); AudioSys.chime(660, 0.2); L.progress();
-      f2 = f2 || L.fragEnts[1]; f2.show(true); toastHook('The lamp is lit.', 3);
+      f2 = f2 || L.fragEnts[1]; f2.show(true); toastHook('The lamp is lit. A memory glows at the far end of the room.', 5);
     });
     f2 = L.fragment(1, M2.x - 0.3, 1.1, M2.z, { hidden: true });
     L.secret({ x: G.cx(8), y: 1.55, z: G.Z(3) + 0.03, glyph: 'circle', yaw: 0, size: 0.5, c: '#ffe0a0' });
@@ -2689,7 +2700,7 @@ Levels.register([{
       const hx = Head.world.x, hz = Head.world.z, inLounge = hx > lx0 && hx < lx1 && hz > lz0 && hz < lz1;
       dk = damp(dk, inLounge && !lampOn ? 0.14 : 1, 3, dt); lampK = damp(lampK, lampOn ? 1 : 0, 2, dt);
       Lights.key.intensity = keyBase * dk; Lights.hemi.intensity = 0.5 * Math.PI * (0.35 + 0.65 * dk);
-      Lights.fill.position.set(LX, 1.5, LZ); Lights.fill.intensity = 5 * Math.PI * lampK; halo.material.opacity = lampOn ? 0.7 + 0.15 * Math.sin(t * 3) : 0;
+      Lights.fill.position.set(LX, 1.5, LZ); Lights.fill.intensity = 5 * Math.PI * lampK; halo.material.opacity = lampOn ? 0.7 + 0.15 * Math.sin(t * 3) : 0.16 + 0.1 * Math.sin(t * 2.2);
       if (inLounge && !lampOn && !toldDark) { toldDark = true; toastHook('It is too dark to see. The lamp has no bulb.', 5); }
       if (!bulb.snapped && bulb.held && !toldBulb) toldBulb = true;
       // fluorescent panel: slow dimming, occasional soft dip (never faster than ~2 Hz)
