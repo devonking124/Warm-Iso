@@ -163,6 +163,20 @@ const hexRGB = (hex) => [((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (h
 const _c1 = new Color();
 let toastHook = null;   // set by UI; lets low-level code raise a toast without importing order issues
 
+/** Problem log. Anything that goes wrong is remembered here so it can be shown INSIDE the headset (a card) and on the gate page afterwards. */
+const Diag = {
+  list: [], fresh: false,
+  add(msg, err) {
+    try {
+      let s = String(msg && msg.message ? msg.message : msg); if (err && err.stack) s += '  ‹' + String(err.stack).split('\n').slice(1, 3).map((x) => x.trim().replace(/^at /, '').slice(0, 90)).join(' ‹ ') + '›';
+      s = s.slice(0, 300); if (this.list.includes(s)) return; if (this.list.length < 10) this.list.push(s); this.fresh = true;
+      const st = document.getElementById('status'); if (st && !document.body.classList.contains('in-vr')) { st.classList.add('bad'); st.textContent = 'A problem was recorded: ' + this.list.join('  ·  '); }
+    } catch (e) { /* the log must never throw */ }
+  },
+};
+window.addEventListener('error', (e) => Diag.add('Error: ' + (e && e.message), e && e.error));
+window.addEventListener('unhandledrejection', (e) => Diag.add('Unhandled: ' + (e && e.reason && e.reason.message ? e.reason.message : e && e.reason), e && e.reason));
+
 /* ═════════════════════════════════════════════════════════════════════════════════════════════
    3. SAVE SYSTEM  (localStorage guarded; silently falls back to memory)
    ═════════════════════════════════════════════════════════════════════════════════════════════ */
@@ -215,6 +229,7 @@ Save.load();
    4. RENDERER / XR BOOTSTRAP
    ═════════════════════════════════════════════════════════════════════════════════════════════ */
 const renderer = new WebGLRenderer({ antialias: true, powerPreference: 'high-performance', stencil: false, alpha: false });
+renderer.debug.onShaderError = (gl, program, vs, fs) => { try { Diag.add('Shader failed to compile: ' + String(gl.getProgramInfoLog(program) || '').slice(0, 160)); } catch (e) { /* */ } };
 renderer.setPixelRatio(1);
 renderer.setSize(2, 2);
 renderer.outputColorSpace = SRGBColorSpace;
@@ -1822,7 +1837,7 @@ const DEG_TO_RAD = DEG;
 
 class LevelCtx {
   constructor(def, id) {
-    this.def = def; this.id = id; this.isHub = id === 'hub'; this.n = this.isHub ? -1 : id;
+    this.def = def; this.id = id; this.isHub = id === 'hub'; this.n = typeof id === 'number' ? id : -1;
     this.group = new Group(); scene.add(this.group);
     this.cache = { geo: new Map(), mat: new Map(), tex: new Map() };
     this.builders = new Map(); this.colliders = []; this.interactables = []; this.bodies = []; this.updaters = []; this.disposers = [];
@@ -2204,16 +2219,22 @@ const Levels = {
   load(id, o = {}) {
     this.unload();
     const def = this.defs.get(id); const L = new LevelCtx(def, id); this.cur = L; this.curId = id;
-    const fell = () => { console.error('level build failed'); if (id !== 'hub') { this.unload(); this.load('hub'); toastHook('That place would not open.', 4); } };
+    const fell = (e) => {
+      Diag.add((id === 'hub' ? 'The hub' : 'Level ' + id) + ' could not be built: ' + (e && e.message ? e.message : e), e);
+      if (id === 'hub') { this.unload(); this.load('safe'); }
+      else if (id !== 'safe') { this.unload(); this.load('hub'); toastHook('That place would not open.', 4); }
+    };
     try {
       const r = def.build(L, o); if (r) L.hooks = r;
       L.flush(); L.applyQuality(Quality.t);
-    } catch (e) { console.error(e); fell(); return; }
+    } catch (e) { console.error(e); fell(e); return; }
     const y = this.floorAt(L.spawn.x, L.spawn.z);
-    Player.placeAt(L.spawn.x, L.spawn.y || y, L.spawn.z, L.spawn.yaw);
-    Interact.hover = null; Journal.isOpen && Journal.close();
-    if (L.def.onReady) L.def.onReady(L);
-    Head.refresh(); this.postUpdate();
+    try {
+      Player.placeAt(L.spawn.x, L.spawn.y || y, L.spawn.z, L.spawn.yaw);
+      Interact.hover = null; Journal.isOpen && Journal.close();
+      if (L.def.onReady) L.def.onReady(L);
+      Head.refresh(); this.postUpdate();
+    } catch (e) { console.error(e); Diag.add('Level start-up failed: ' + (e && e.message), e); }
   },
   unload() {
     const L = this.cur; if (!L) return;
@@ -2229,7 +2250,7 @@ const Levels = {
     const ups = L.updaters;
     for (let i = 0; i < ups.length; i++) {
       const fn = ups[i];
-      try { fn(dt, L.time, L); } catch (e) { const k = (L.errs.get(fn) || 0) + 1; L.errs.set(fn, k); if (k < 4) console.error('level update error', e); if (k > 60) { ups.splice(i, 1); i--; } }
+      try { fn(dt, L.time, L); } catch (e) { const k = (L.errs.get(fn) || 0) + 1; L.errs.set(fn, k); if (k < 4) console.error('level update error', e); if (k === 1) Diag.add('Level update error: ' + (e && e.message), e); if (k > 60) { ups.splice(i, 1); i--; } }
     }
     if (L.hooks && L.hooks.update) { try { L.hooks.update(dt, L.time, L); } catch (e) { const k = (L.errs.get('hook') || 0) + 1; L.errs.set('hook', k); if (k < 4) console.error('level hook error', e); if (k > 60) L.hooks.update = null; } }
     L.tickBodies(dt); L.updateHint(dt);
@@ -2329,7 +2350,7 @@ const Trans = {
   },
   update(dt) {
     if (this.phase === 'out') { this.t += dt; Fade.v = Ease.inOut(clamp(this.t / this.dur, 0, 1)); if (this.t >= this.dur) { Fade.v = 1; this.phase = 'load'; } }
-    else if (this.phase === 'load') { Levels.load(this.target, this.opts); this.phase = 'in'; this.t = 0; Fade.v = 1; }
+    else if (this.phase === 'load') { try { Levels.load(this.target, this.opts); } catch (e) { console.error(e); Diag.add('Loading failed: ' + (e && e.message), e); if (!Levels.cur) { try { Levels.load('safe'); } catch (e2) { /* nothing more to try */ } } } this.phase = 'in'; this.t = 0; Fade.v = 1; }
     else if (this.phase === 'in') { this.t += dt; const k = clamp(this.t / (this.dur * 1.3 + 0.3), 0, 1); Fade.v = 1 - Ease.inOut(k); if (k >= 1) { Fade.v = 0; this.phase = 'idle'; } }
   },
 };
@@ -4086,30 +4107,70 @@ Levels.register([{
 }]);
 
 /* ═════════════════════════════════════════════════════════════════════════════════════════════
+   SAFE ROOM — if the hub ever fails to build the player lands here instead of in a black void.
+   ═════════════════════════════════════════════════════════════════════════════════════════════ */
+Levels.register([{
+  id: 'safe', name: 'A quiet room',
+  build(L) {
+    L.env({ fog: [0x2a211b, 0.02], hemi: [0xfff0dd, 0x6a5a4a, 1.3], key: { color: 0xffe2b8, i: 5, pos: [0, 2.4, 0], dist: 12, decay: 2 } });
+    const B = L.b('flat'), S = 4, H = 3;
+    B.flat(-S, -S, S, S, 0, 0xb59a78, 2, true); B.flat(-S, -S, S, S, H, 0x8a7860, 2, false);
+    B.wall(-S, -S, S, -S, 0, H, 0, 1, 0xcbb894, 2, 0); B.wall(S, -S, S, S, 0, H, -1, 0, 0xcbb894, 2, 0); B.wall(-S, S, S, S, 0, H, 0, -1, 0xcbb894, 2, 0); B.wall(-S, -S, -S, S, 0, H, 1, 0, 0xcbb894, 2, 0);
+    L.box(-S - 2, -3, -S - 2, S + 2, H, -S); L.box(S, -3, -S, S + 2, H, S); L.box(-S - 2, -3, S, S + 2, H, S + 2); L.box(-S - 2, -3, -S, -S, H, S);
+    L.bounds = { x0: -S + 0.5, x1: S - 0.5, z0: -S + 0.5, z1: S - 0.5 }; L.spawn = { x: 0, y: 0, z: 2, yaw: 0 };
+    L.sign('The world would not load.\nPress B to open the Journal.\nThe details are on the card in front of you.', 0, 1.6, -S + 0.06, 3.4, 1.2, { fg: '#f6e7d0', bg: 'rgba(30,20,14,.9)', border: '#c9a060', size: 46, cw: 768 });
+    L.hint(() => null);
+  },
+}]);
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════
    13. MAIN LOOP & SESSION LIFECYCLE
    ═════════════════════════════════════════════════════════════════════════════════════════════ */
 const Game = { started: false, noFloor: false, lastT: 0, vis: 'visible', acc: 0, pickT: 0, session: null, frames: 0 };
-let errBudget = 30;
+/* Head-locked cards that sit above the fade: a "loading" card so the headset is never just black, and a problem report. */
+const Loading = new FloatText(768, 200, 0.9, 0.234, { dist: 1.25, offY: 0, follow: 5, order: 120 });
+const DiagCard = new FloatText(1024, 440, 1.5, 0.644, { dist: 1.3, offY: 0.05, follow: 2.5, order: 130 });
+function drawLoading(g, w, h) {
+  rrect(g, 8, 8, w - 16, h - 16, 36); g.fillStyle = 'rgba(18,11,8,.92)'; g.fill(); g.strokeStyle = 'rgba(255,196,120,.6)'; g.lineWidth = 3; g.stroke();
+  g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = UI_COL.gold; g.font = '600 26px Georgia, serif'; g.fillText('H A L F - R E M E M B E R E D', w / 2, 66); g.fillStyle = '#f6e7d0'; g.font = 'italic 40px Georgia, serif'; g.fillText('remembering…', w / 2, 132);
+}
+function drawDiag(g, w, h) {
+  rrect(g, 8, 8, w - 16, h - 16, 30); g.fillStyle = 'rgba(30,10,8,.94)'; g.fill(); g.strokeStyle = 'rgba(255,140,110,.7)'; g.lineWidth = 3; g.stroke();
+  g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = '#ffb59a'; g.font = '600 28px Georgia, serif'; g.fillText('A problem was recorded — please report this text:', 40, 28);
+  g.fillStyle = '#f6e7d0'; g.font = '22px Georgia, serif'; let y = 78;
+  for (const m of Diag.list.slice(-4)) { for (const ln of wrapText(g, '• ' + m, w - 90).slice(0, 4)) { if (y > h - 44) break; g.fillText(ln, 40, y); y += 27; } y += 5; }
+}
 
+/** Run one step of the frame; a failure is logged once and never stops the other steps (the fade and level loading must always run). */
+function step(name, fn) {
+  try { fn(); } catch (e) {
+    const k = (Game.stepErrs[name] = (Game.stepErrs[name] || 0) + 1);
+    if (k === 1) { console.error('frame step "' + name + '" failed', e); Diag.add(name + ': ' + (e && e.message ? e.message : e), e); }
+  }
+}
+Game.stepErrs = {};
 function frame(time, xrFrame) {
   if (!xrFrame) return;
   Game.frames++;
   const now = time / 1000, raw = Game.lastT ? now - Game.lastT : 1 / 72; Game.lastT = now;
   let dt = clamp(raw, 0, 0.1);
-  const session = renderer.xr.getSession(); Game.vis = session ? session.visibilityState || 'visible' : 'visible';
-  const hidden = Game.vis !== 'visible';
-  try {
-    Head.update(xrFrame);
-    Game.pickT -= raw; if (Game.pickT <= 0) { Game.pickT = Input.active ? 1.5 : 0.25; Input.pick(); }
-    Input.poll();
-    if (!hidden) Adapt.update(raw); else dt = 0;
-    TIME_U.value += dt;
-    const paused = hidden || Journal.isOpen || Welcome.isOpen, gdt = paused ? 0 : dt, L = Levels.cur;
-    if (Input.active && !hidden) {
+  let hidden = false, blurred = false;
+  step('session', () => { const session = renderer.xr.getSession(); Game.vis = session ? session.visibilityState || 'visible' : 'visible'; hidden = Game.vis === 'hidden'; blurred = Game.vis === 'visible-blurred'; });   // blurred = a system menu is up: keep the world alive, pause play
+  if (hidden) dt = 0;
+  step('head', () => Head.update(xrFrame));
+  step('input', () => { Game.pickT -= raw; if (Game.pickT <= 0) { Game.pickT = Input.active ? 1.5 : 0.25; Input.pick(); } Input.poll(); });
+  step('quality', () => { if (!hidden && !blurred) Adapt.update(raw); });
+  TIME_U.value += dt;
+  const paused = hidden || blurred || Journal.isOpen || Welcome.isOpen, gdt = paused ? 0 : dt;
+  step('buttons', () => {
+    if (Input.active && !hidden && !blurred) {
       if (Input.pressed(BTN.B) && !Welcome.isOpen && Trans.phase === 'idle') Journal.toggle();
       if (Input.pressed(BTN.A) && !paused) Lantern.toggle();
     }
-    if (L) {
+  });
+  const L = Levels.cur;
+  if (L) {
+    step('player', () => {
       if (gdt > 0) {
         Player.update(gdt, L);
         Game.acc += gdt; let n = 0;
@@ -4117,23 +4178,28 @@ function frame(time, xrFrame) {
         if (n === CFG.MAX_SUBSTEPS) Game.acc = 0;
         Save.d.playSec += gdt;
       }
-      Interact.update(dt);
-      Levels.update(gdt);
-    }
-    Trans.update(dt);
-    Lantern.update(dt, TIME_U.value);
-    Hints.update(dt); UI.update(dt); Toast.update(dt); MemCard.update(dt);
-    Fade.update(dt);
-    Levels.postUpdate();
-    AudioSys.listen(Head.world, Head.fwd); AudioSys.update(gdt);
-    Dev.update(dt); Save.tick(dt);
-    if (Save.s.dev !== Game.devWas) { Game.devWas = Save.s.dev; renderer.info.autoReset = true; }
-  } catch (e) { if (errBudget-- > 0) console.error('frame error', e); }
-  renderer.render(scene, camera);
+    });
+    step('interact', () => Interact.update(dt));
+    step('level', () => Levels.update(gdt));
+  }
+  step('transition', () => Trans.update(dt));
+  step('lantern', () => Lantern.update(dt, TIME_U.value));
+  step('ui', () => { Hints.update(dt); UI.update(dt); Toast.update(dt); MemCard.update(dt); });
+  step('fade', () => Fade.update(dt));
+  step('cards', () => {
+    if (Loading.on && Trans.phase !== 'load' && Fade.v < 0.5) Loading.hide();
+    Loading.update(dt); DiagCard.update(dt);
+    if (Diag.fresh) { Diag.fresh = false; DiagCard.show(drawDiag, 60); }
+    if (!Levels.cur && !Game.warned && performance.now() - Game.t0 > 6000) { Game.warned = true; Diag.add(`The world had not loaded after 6 s (phase ${Trans.phase}, visibility ${Game.vis}, frames ${Game.frames})`); }
+  });
+  step('follow', () => Levels.postUpdate());
+  step('audio', () => { AudioSys.listen(Head.world, Head.fwd); AudioSys.update(gdt); });
+  step('misc', () => { Dev.update(dt); Save.tick(dt); if (Save.s.dev !== Game.devWas) { Game.devWas = Save.s.dev; renderer.info.autoReset = true; } });
+  try { renderer.render(scene, camera); } catch (e) { Diag.add('Render error: ' + (e && e.message), e); }   // a throw here would stop the XR loop for good
 }
 
 async function enterVR() {
-  AudioSys.init();                                   // must run inside the click gesture
+  try { AudioSys.init(); } catch (e) { Diag.add('Audio could not start: ' + (e && e.message), e); }   // must run inside the click gesture; sound is optional
   const btn = document.getElementById('enter'), stat = document.getElementById('status');
   if (!navigator.xr) return;
   btn.disabled = true; stat.classList.remove('bad'); stat.textContent = 'Starting…';
@@ -4150,15 +4216,21 @@ async function enterVR() {
   if (Game.noFloor) renderer.xr.setReferenceSpaceType('local');
   try { await renderer.xr.setSession(session); }
   catch (e) { console.error(e); stat.classList.add('bad'); stat.textContent = 'Could not start VR: ' + (e && e.message ? e.message : e); btn.disabled = false; try { session.end(); } catch (e2) { /* */ } return; }
-  const sz = new Vector2(); renderer.getSize(sz); PX_U.value = Math.max(400, sz.y * 0.5);
-  Quality.apply();
-  try { if (session.updateTargetFrameRate && session.supportedFrameRates) { const rates = Array.from(session.supportedFrameRates), want = Quality.t.fps; await session.updateTargetFrameRate(rates.includes(want) ? want : rates.includes(72) ? 72 : rates[0]); } } catch (e) { /* optional */ }
+  try { const sz = new Vector2(); renderer.getSize(sz); PX_U.value = Math.max(400, sz.y * 0.5); Quality.apply(); } catch (e) { Diag.add('Setup: ' + (e && e.message), e); }
   document.body.classList.add('in-vr');
-  Game.lastT = 0; Game.acc = 0; Input.pick(); AudioSys.applyVolumes();
+  Game.lastT = 0; Game.acc = 0; Game.t0 = performance.now(); Game.warned = false;
+  try { Input.pick(); AudioSys.applyVolumes(); } catch (e) { Diag.add('Setup: ' + (e && e.message), e); }
   if (!Game.started) {
     Game.started = true; Fade.set(1, 0x000000); Trans.phase = 'load'; Trans.target = 'hub'; Trans.opts = {}; Trans.dur = 1.2;
   } else if (Levels.cur) { Fade.set(1, 0x000000); Trans.phase = 'in'; Trans.t = 0; Trans.dur = 0.8; }
-  renderer.setAnimationLoop(frame);
+  try { Loading.show(drawLoading, 0); } catch (e) { /* cosmetic */ }
+  renderer.setAnimationLoop(frame);                  // start drawing at once — nothing below may delay the first frame
+  try {                                              // ask for the frame rate in the background (never awaited: some browsers are slow to answer)
+    if (session.updateTargetFrameRate && session.supportedFrameRates) {
+      const rates = Array.from(session.supportedFrameRates), want = Quality.t.fps, pick = rates.includes(want) ? want : rates.includes(72) ? 72 : rates[0];
+      if (pick) Promise.race([session.updateTargetFrameRate(pick), new Promise((r) => setTimeout(r, 4000))]).catch(() => { /* optional */ });
+    }
+  } catch (e) { /* optional */ }
 }
 function onVisibility() {
   const s = Game.session; if (!s) return;
@@ -4170,6 +4242,7 @@ function onSessionEnd() {
   document.body.classList.remove('in-vr');
   const btn = document.getElementById('enter'), stat = document.getElementById('status'); btn.disabled = false; btn.textContent = 'RE-ENTER VR';
   stat.classList.remove('bad'); stat.textContent = `Paused. ${Save.doneCount()} of 12 places remembered. Your progress is saved.`;
+  if (Diag.list.length) { stat.classList.add('bad'); stat.textContent += '  A problem was recorded: ' + Diag.list.join('  ·  '); }
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden) { Save.flush(); AudioSys.suspend(); } else if (Game.session) AudioSys.resume(); });
 window.addEventListener('pagehide', () => Save.flush());
@@ -4196,7 +4269,7 @@ function boot() {
 }
 boot();
 /* Small debug handle for automated testing (harmless in production). */
-window.__HR = { Hints, Toast, MemCard, Dev, Save, THREE, scene, renderer, camera, rig, Levels, Player, Input, Save, Journal, Welcome, Lantern, Interact, Phys, Fade, Trans, UI, Head, AudioSys, Music, Quality, Adapt, Game, Lights, Ctl, Grip, MEMORIES, LevelCtx };
+window.__HR = { Diag, Loading, DiagCard, Hints, Toast, MemCard, Dev, Save, THREE, scene, renderer, camera, rig, Levels, Player, Input, Save, Journal, Welcome, Lantern, Interact, Phys, Fade, Trans, UI, Head, AudioSys, Music, Quality, Adapt, Game, Lights, Ctl, Grip, MEMORIES, LevelCtx };
 </script>
 </body>
 </html>
