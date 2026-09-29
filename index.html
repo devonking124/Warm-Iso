@@ -393,7 +393,12 @@ const AudioSys = {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     let ctx; try { ctx = new AC({ latencyHint: 'interactive' }); } catch (e) { return; }
-    this.ctx = ctx; this.ok = true;
+    this.ctx = ctx;
+    try { this.build(ctx); this.ok = true; } catch (e) { this.ok = false; Diag.add('Sound could not start: ' + (e && e.message ? e.message : e), e); return; }   // a half-built audio graph must never be used
+    this.applyVolumes();
+    this.resume();
+  },
+  build(ctx) {
     const g = (v) => { const n = ctx.createGain(); n.gain.value = v; return n; };
     this.master = g(0.8);
     this.comp = ctx.createDynamicsCompressor();
@@ -413,8 +418,6 @@ const AudioSys = {
       pink: mk((d, n) => { let b0 = 0, b1 = 0, b2 = 0; for (let i = 0; i < n; i++) { const w = Math.random() * 2 - 1; b0 = 0.99765 * b0 + w * 0.099046; b1 = 0.963 * b1 + w * 0.2965164; b2 = 0.57 * b2 + w * 1.0526913; d[i] = (b0 + b1 + b2 + w * 0.1848) * 0.2; } }),
       brown: mk((d, n) => { let l = 0; for (let i = 0; i < n; i++) { l = (l + 0.02 * (Math.random() * 2 - 1)) / 1.02; d[i] = l * 3.2; } }),
     };
-    this.applyVolumes();
-    this.resume();
   },
   makeIR(dur, decay) {
     const ctx = this.ctx, len = (ctx.sampleRate * dur) | 0, buf = ctx.createBuffer(2, len, ctx.sampleRate);
@@ -4244,7 +4247,7 @@ function onSessionEnd() {
   stat.classList.remove('bad'); stat.textContent = `Paused. ${Save.doneCount()} of 12 places remembered. Your progress is saved.`;
   if (Diag.list.length) { stat.classList.add('bad'); stat.textContent += '  A problem was recorded: ' + Diag.list.join('  ·  '); }
 }
-document.addEventListener('visibilitychange', () => { if (document.hidden) { Save.flush(); AudioSys.suspend(); } else if (Game.session) AudioSys.resume(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { Save.flush(); if (!Game.session) AudioSys.suspend(); } else if (Game.session) AudioSys.resume(); });   // inside a headset the page may count as hidden while you play: the session's own visibility decides about sound
 window.addEventListener('pagehide', () => Save.flush());
 
 async function initGate() {
