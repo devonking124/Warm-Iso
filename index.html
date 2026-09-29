@@ -1453,7 +1453,7 @@ const Interact = {
   },
   startPull(it) {
     const b = it.grab; if (b.locked) return;
-    this.pulling = { it, body: b }; b.held = true; b.frozen = false; b.snapped = null; Levels.cur && Levels.cur.bodyGrabbed(b);
+    this.pulling = { it, body: b }; b.held = true; b.frozen = false; Levels.cur && Levels.cur.bodyGrabbed(b); b.snapped = null;   /* bodyGrabbed frees the slot it was snapped into */
     this.holdDist = clamp(_it.copy(b.pos).sub(_io).length(), 0.8, 5); Input.haptic(0.5, 60); AudioSys.whoosh(0.08); Input.used.trigger = true;
   },
   pullUpdate(dt) {
@@ -2090,7 +2090,7 @@ class LevelCtx {
     const ent = { door: d, cond: o.cond || null, ready: false, opening: false, halo };
     this.exitEnt = ent;
     d.it = this.interact({
-      obj: d.group, half: new Vector3(d.w / 2 + 0.1, d.h / 2 + 0.05, 0.4), off: new Vector3(0, d.h / 2, 0), label: 'Leave', labelFn: () => (this.exitReady() ? 'Step through' : 'Locked'),
+      obj: d.group, half: new Vector3(d.w / 2 + 0.1, d.h / 2 + 0.05, 0.4 * Math.max(1, o.s ?? 1)), off: new Vector3(0, d.h / 2, 0), label: 'Leave', labelFn: () => (this.exitReady() ? 'Step through' : 'Locked'),
       onSelect: () => {
         if (ent.opening) return;
         if (!this.exitReady()) { toastHook((typeof o.lockedMsg === 'function' ? o.lockedMsg() : o.lockedMsg) || (this.got.every(Boolean) ? 'Something is still undone.' : `Memories ${this.got.filter(Boolean).length} of 3. The door is waiting.`), 3.2); AudioSys.thud(0.4); Input.haptic(0.5, 60); return; }
@@ -3023,7 +3023,7 @@ Levels.register([{
       neon.push(m); if (s.puzzle < 0) { m.material.color.setScalar(0.12); continue; }
       const sm = new Mesh(L.geo('lensG', () => new CylinderGeometry(0.16, 0.16, 0.06, 14).rotateX(Math.PI / 2)), new MeshBasicMaterial({ color: 0x4a3418 })); sm.position.set(s.x, 1.45, ZS - 0.5); L.add(sm); B.box(s.x, 1.45, ZS - 0.45, 0.4, 0.4, 0.06, 0x3a3e48, 1);
       sensors[s.puzzle] = sm; s.m = m;
-      L.interact({ obj: sm, r: 0.32, label: 'Hold to power the sign', enabled: () => !lit[s.puzzle] && !solved, onHold: (it, dt) => { charge[s.puzzle] += dt / 1.0; if (Math.random() < dt * 3) Input.haptic(0.15, 20); if (charge[s.puzzle] >= 1) { charge[s.puzzle] = 0; power(s.puzzle); } } });
+      L.interact({ obj: sm, r: 0.32, label: 'Hold to power the sign', enabled: () => !lit[s.puzzle] && !solved, onHold: (it, dt) => { charge[s.puzzle] += dt * 2.2; /* the updater drains 1.2/s, so holding nets ~1 charge per second */ if (Math.random() < dt * 3) Input.haptic(0.15, 20); if (charge[s.puzzle] >= 1) { charge[s.puzzle] = 0; power(s.puzzle); } } });
       L.emitter({ x: s.x, y: 4.5, z: ZS - 0.4 }, { type: 'white', filter: 'bandpass', freq: 9000, q: 4, gain: 0.0035, ref: 3 });
     }
     const storeOf = [0, 4, 3, 1].map((i) => stores[i]);     // puzzle index → store   (0 pretzels · 1 records · 2 toys · 3 shoes)
@@ -3050,7 +3050,7 @@ Levels.register([{
     const cHalo = new Sprite(new SpriteMaterial({ map: L.tex('glow', () => TEX.glow()), color: 0xffc880, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0.7 })); cHalo.scale.setScalar(0.55); coinMesh.add(cHalo);
     const coin = L.body(coinMesh, [0.1, 0.03, 0.1], { hold: 0.9, label: 'A penny. Hold to pull', pickHalf: [0.22, 0.16, 0.22], tag: 'coin', loud: 0.3 });
     const fC = L.fragment(2, 1.5, 1.45, 0, { hidden: true });
-    L.slot(new Vector3(0, 0.08, 0), 2.6, (b) => b.tag === 'coin', () => { wished = true; fw.visible = true; L.progress(); AudioSys.chord({ root: 64, scale: 'lydian' }, [0, 2, 4, 6, 9], 'glass', 0.4, 0.09); AudioSys.splash(0.2); setTimeout(() => { fC.show(true); }, 2400); toastHook('A wish, for something ordinary.', 4); });
+    L.slot(new Vector3(0, 0.08, 0), 4.4, (b) => b.tag === 'coin', () => { wished = true; fw.visible = true; L.progress(); AudioSys.chord({ root: 64, scale: 'lydian' }, [0, 2, 4, 6, 9], 'glass', 0.4, 0.09); AudioSys.splash(0.2); setTimeout(() => { fC.show(true); }, 2400); toastHook('A wish, for something ordinary.', 4); });
     L.secret({ x: 0, y: 7.85, z: 0, glyph: 'star', rx: Math.PI / 2, size: 1.8, r: 1.1, c: '#bfe0ff' });
     // ── escalators (stopped; walk them) ──
     const escX = [[-14, -11.8], [-9.5, -7.3]], TH = Math.atan2(UP, 7), EL = Math.hypot(UP, 7);
