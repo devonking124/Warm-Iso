@@ -3278,9 +3278,9 @@ Levels.register([{
     // ── crayon drawings & the growth chart ──
     const DRW = L.builderWith('draw', L.mat('drawM', () => new MeshBasicMaterial({ map: L.tex('drawings', () => TEX.drawings({ seed: 51 })), vertexColors: true })), false, false), r = makeRng(12);
     for (let i = 0; i < 12; i++) { const col = i % 4, row = (i >> 2) % 4, u0 = col / 4, v1 = 1 - row / 4, z = -Z + 4 + (i % 6) * 3.7 + r.range(-0.3, 0.3), y = 4.6 + r.range(-0.5, 1.6) + (i >= 6 ? 3.4 : 0), s = 1.6; if (z > 3.8 && z < 11.6 && y < 11.5 && i < 6) continue; DRW.quad([X - 0.02, y - s, z - s, X - 0.02, y - s, z + s, X - 0.02, y + s, z + s, X - 0.02, y + s, z - s], [-1, 0, 0], [u0, v1 - 0.25, u0 + 0.25, v1 - 0.25, u0 + 0.25, v1, u0, v1], 0xffffff, 1); }
-    for (let i = 0; i < 6; i++) B.box(-X + 0.06, 0.55 + i * 0.23, 11.6, 0.05, 0.05, 0.9, 0x5a3a20, 1);
-    B.box(-X + 0.06, 0.4, 11.6, 0.05, 1.5, 0.07, 0x7a5a3a, 1);
-    L.secret({ x: -X + 0.09, y: 1.68, z: 11.6, glyph: 'hand', yaw: Math.PI / 2, size: 0.55, r: 0.5, c: '#ffe6a0' });
+    for (let i = 0; i < 6; i++) B.box(-X + 0.06, 0.55 + i * 0.23, 3.6, 0.05, 0.05, 0.9, 0x5a3a20, 1);
+    B.box(-X + 0.06, 0.4, 3.6, 0.05, 1.5, 0.07, 0x7a5a3a, 1);
+    L.secret({ x: -X + 0.09, y: 1.68, z: 3.6, glyph: 'hand', yaw: Math.PI / 2, size: 0.55, r: 0.5, c: '#ffe6a0' });
     // ceiling stars (plastic, glow-in-the-dark)
     for (let i = 0; i < 90; i++) gf.add(r.range(-X + 1, X - 1), H - 0.15, r.range(-Z + 1, Z - 1), r.range(0.5, 1.1), r() < 0.8 ? 0xcfffc0 : 0xf4ffe8, 0.12, 0);
     L.dust(160, { x0: -X + 1, x1: X - 1, y0: 0.5, y1: 13, z0: -Z + 1, z1: Z - 1 }, 0xdfe8ff, 0.09, 0.5, 0.6);
@@ -3941,8 +3941,8 @@ Levels.register([{
     B.cyl(-0.6, 0.004, 0.6, 0.86, 0.86, 0.008, 28, 0xd9c2b0); B.cyl(-0.6, 0.008, 0.6, 0.62, 0.62, 0.008, 28, 0xf0e2c4); B.cyl(-0.6, 0.012, 0.6, 0.4, 0.4, 0.008, 28, 0xd9c2b0);
     Props.shelf(B, -1.98, 2.27, Math.PI / 2, 0.44, 1.5, 0.22, { rows: 4, seed: 9 }); L.box(-RX, 0, 2.03, -1.86, 1.5, 2.5);
     // ── the wardrobe, pulled out from the corner — with a small light behind it ──
-    const WD = 0xd6bb8a; B.box(1.45, 1.0, 1.685, 0.5, 2.0, 1.47, WD, 1); B.box(1.195, 1.0, 1.685, 0.012, 1.9, 0.02, 0x8a6a48, 1); B.sphere(1.19, 1.0, 1.58, 0.02, 0xd9b968, 1, 1, 1, 5); B.sphere(1.19, 1.0, 1.79, 0.02, 0xd9b968, 1, 1, 1, 5);
-    L.box(1.2, 0, 0.95, 1.7, 2.0, 2.42);
+    const WD = 0xd6bb8a; B.box(1.3, 1.0, 1.685, 0.5, 2.0, 1.47, WD, 1); B.box(1.045, 1.0, 1.685, 0.012, 1.9, 0.02, 0x8a6a48, 1); B.sphere(1.04, 1.0, 1.58, 0.02, 0xd9b968, 1, 1, 1, 5); B.sphere(1.04, 1.0, 1.79, 0.02, 0xd9b968, 1, 1, 1, 5);
+    L.box(1.05, 0, 0.95, 1.55, 2.0, 2.42);
     // ── the keepsake shelf (east wall): 3 boards, 4 places each ──
     const SHW = 1.6; B.box(RX - 0.02, 1.25, SH.z0, 0.04, 1.3, SHW, 0xe9dcc0, 1); for (const y of SH.rowY) B.box(RX - 0.13, y - 0.02, SH.z0, 0.22, 0.03, SHW, wood, 1); B.box(RX - 0.13, 1.885, SH.z0, 0.22, 0.03, SHW, wood, 1); for (const s of [-1, 1]) B.box(RX - 0.13, 1.25, SH.z0 + s * (SHW / 2 - 0.015), 0.22, 1.3, 0.03, wood, 1);
     // ── curtains that breathe, crayon drawings, a sun on the wall ──
