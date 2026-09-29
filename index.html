@@ -3512,7 +3512,7 @@ Levels.register([{
     for (let i = 0; i < 8; i++) { const x = -3 + (i % 2) * (i > 5 ? 0 : 0) + ((i === 3 || i === 4) ? (i === 3 ? -0.4 : 0.4) : 0), z = 14 + i * 0.7; B.box(x, 0.008, z, 0.6, 0.006, 0.6, 0xd8d4f0, 1); }
     L.secret({ x: -3, y: 0.03, z: 19.6, glyph: 'star', rx: -Math.PI / 2, size: 0.9, r: 0.55, c: '#ffe0f0', range: 5 });
     // ── fragments (each appears when its phrase is played back) ──
-    const frags = [L.fragment(0, 0, 1.55, -10.4, { hidden: true }), L.fragment(1, 8, 1.9, -6, { hidden: true }), L.fragment(2, 0, 2.4, 0, { hidden: true })];
+    const frags = [L.fragment(0, 0, 1.55, -10.4, { hidden: true }), L.fragment(1, 8, 1.75, -3.0, { hidden: true }), L.fragment(2, 0, 2.4, 0, { hidden: true })];
     // ── the game: listen, then repeat ──
     const PHRASES = [[0, 1, 2], [2, 0, 3, 1], [1, 3, 0, 2, 1]]; let phrase = 0, k = 0, demo = null, waitT = 2.5, idleT = 0, miss = 0;
     const mid = (i) => degToMidi(L.theme, [0, 1, 2, 3][i] + 2);
