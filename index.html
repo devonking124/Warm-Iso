@@ -1490,7 +1490,7 @@ const Phys = {
         b.rest = false;
         if (b.pos.y - b.half.y < fy) { b.pos.y = fy + b.half.y; if (b.vel.y < -1.2) AudioSys.thud(Math.min(1, -b.vel.y / 6) * (b.loud ?? 1)); b.vel.y = Math.abs(b.vel.y) > 1.2 ? -b.vel.y * (b.bounce ?? 0.22) : 0; b.vel.x *= 0.8; b.vel.z *= 0.8; if (b.vel.y === 0 && b.vel.lengthSq() < 0.02) b.rest = true; }
         // walls
-        Levels.collide(b.pos.x, b.pos.z, b.pos.y - b.half.y, Math.max(b.half.x, b.half.z) * 0.95, _pcol, b.pos.y + b.half.y);
+        Levels.collide(b.pos.x, b.pos.z, b.pos.y - b.half.y, Math.max(b.half.x, b.half.z) * 0.95, _pcol, b.pos.y + b.half.y, true);
         if (_pcol.pen > 0) { const px = b.pos.x, pz = b.pos.z; b.pos.x = _pcol.x; b.pos.z = _pcol.z; const dx = _pcol.x - px, dz = _pcol.z - pz, l = Math.hypot(dx, dz) || 1, vn = b.vel.x * dx / l + b.vel.z * dz / l; if (vn < 0) { b.vel.x -= 1.6 * vn * dx / l; b.vel.z -= 1.6 * vn * dz / l; } }
       }
       // body-body
@@ -1567,6 +1567,9 @@ class Panel {
     this.mesh.lookAt(Head.world); this.mesh.updateMatrixWorld(true); this.visible = true; this.mesh.visible = true; this.dirty = true;
     if (!UI.panels.includes(this)) UI.panels.push(this); UI.refreshBlocking();
   }
+  /** Fixed world placement (level-owned panels such as keypads). */
+  placeAt(x, y, z, yaw) { this.mesh.position.set(x, y, z); this.mesh.rotation.set(0, yaw, 0); this.mesh.updateMatrixWorld(true); this.visible = true; this.mesh.visible = true; this.dirty = true; if (!UI.panels.includes(this)) UI.panels.push(this); UI.refreshBlocking(); }
+  dispose() { this.hide(); scene.remove(this.mesh); this.mesh.geometry.dispose(); this.mesh.material.dispose(); this.tex.dispose(); }
   hide() { this.visible = false; this.mesh.visible = false; const i = UI.panels.indexOf(this); if (i >= 0) UI.panels.splice(i, 1); UI.refreshBlocking(); }
   /** ray → panel plane. Returns {t,u,v,panel} in canvas pixel coords, or null. */
   hit(o, d, free) {
@@ -1976,18 +1979,21 @@ class LevelCtx {
   ripple(x, z, amp = 1) { const m = this.waterMesh; if (!m) return; const r = m.material.uniforms.uRip.value[this.ripIdx++ & 3]; r.set(x, z, TIME_U.value, amp); }
   /* ── doors ── */
   door(x, y, z, yaw, o = {}) {
-    const w = o.w ?? 1.0, h = o.h ?? 2.1, fc = o.frame ?? 0x5b4028, B = this.b('flat'), th = 0.2;
-    B.push(x, y, z, yaw);
-    B.box(-w / 2 - 0.06, h / 2, 0, 0.12, h + 0.1, th, fc, 1); B.box(w / 2 + 0.06, h / 2, 0, 0.12, h + 0.1, th, fc, 1); B.box(0, h + 0.05, 0, w + 0.24, 0.12, th, fc, 1);
-    if (o.wall) { B.box(0, h + 0.05 + (o.wall - h) / 2 + 0.06, 0, w + 0.24, o.wall - h - 0.05, th * 0.5, o.wallColor ?? 0x998877, 2); }
-    B.pop();
+    const w = o.w ?? 1.0, h = o.h ?? 2.1, fc = o.frame ?? 0x5b4028, B = this.b('flat'), sc = o.s ?? 1, th = 0.2 * sc, ft = 0.12 * sc;
+    if (!o.dynamic) {
+      B.push(x, y, z, yaw);
+      B.box(-w / 2 - ft / 2, h / 2, 0, ft, h + ft, th, fc, 1); B.box(w / 2 + ft / 2, h / 2, 0, ft, h + ft, th, fc, 1); B.box(0, h + ft / 2, 0, w + 2 * ft, ft, th, fc, 1);
+      if (o.wall) { B.box(0, h + 0.05 + (o.wall - h) / 2 + 0.06, 0, w + 0.24, o.wall - h - 0.05, th * 0.5, o.wallColor ?? 0x998877, 2); }
+      B.pop();
+    }
     const dg = new Group(); dg.position.set(x, y, z); dg.rotation.y = yaw; this.group.add(dg);
+    if (o.dynamic) { const fm = this.mat('frameM' + fc, () => new MeshLambertMaterial({ color: fc })); for (const [px, py, sx, sy] of [[-w / 2 - ft / 2, h / 2, ft, h + ft], [w / 2 + ft / 2, h / 2, ft, h + ft], [0, h + ft / 2, w + 2 * ft, ft]]) { const m = new Mesh(this.geo('fb' + sx + '_' + sy, () => new BoxGeometry(sx, sy, th)), fm); m.position.set(px, py, 0); dg.add(m); } }
     const pivot = new Group(); pivot.position.set(-w / 2, 0, 0); dg.add(pivot);
     const leafMat = this.mat('door' + (o.color ?? 0x8a5a34), () => new MeshLambertMaterial({ color: o.color ?? 0x8a5a34, map: this.tex('doorwood', () => TEX.wood({ base: '#9a6a40', planks: 3, size: 256 })) }));
-    const leaf = new Mesh(this.geo('leaf' + w + '_' + h, () => new BoxGeometry(w - 0.02, h - 0.02, 0.05).translate(w / 2, h / 2, 0)), leafMat); pivot.add(leaf);
-    const knob = new Mesh(this.geo('knob', () => new SphereGeometry(0.035, 8, 6)), this.mat('knob', () => new MeshLambertMaterial({ color: 0xc9a24a, emissive: 0x3a2a08 }))); knob.position.set(w - 0.12, h * 0.48, 0.05); pivot.add(knob);
-    const behind = new Mesh(this.geo('plane1', () => new PlaneGeometry(1, 1)), this.mat('behind' + (o.glow ?? 0xfff0d8), () => new MeshBasicMaterial({ color: o.glow ?? 0xfff0d8 }))); behind.scale.set(w, h, 1); behind.position.set(0, h / 2, -0.12); behind.rotation.y = Math.PI; dg.add(behind);
-    const col = o.noCollider ? null : this.collider(x, z, w / 2 + 0.04, 0.09, yaw, y, y + h, { door: true });
+    const leaf = new Mesh(this.geo('leaf' + w + '_' + h + '_' + sc, () => new BoxGeometry(w - 0.02, h - 0.02, 0.05 * sc).translate(w / 2, h / 2, 0)), leafMat); pivot.add(leaf);
+    const knob = new Mesh(this.geo('knob' + sc, () => new SphereGeometry(0.035 * sc, 8, 6)), this.mat('knob', () => new MeshLambertMaterial({ color: 0xc9a24a, emissive: 0x3a2a08 }))); knob.position.set(w - 0.12 * sc, h * 0.48, 0.05 * sc); pivot.add(knob);
+    const behind = new Mesh(this.geo('plane1', () => new PlaneGeometry(1, 1)), this.mat('behind' + (o.glow ?? 0xfff0d8), () => new MeshBasicMaterial({ color: o.glow ?? 0xfff0d8 }))); behind.scale.set(w, h, 1); behind.position.set(0, h / 2, -0.12 * sc); behind.rotation.y = Math.PI; dg.add(behind);
+    const col = o.noCollider ? null : this.collider(x, z, w / 2 + 0.04 * sc, 0.09 * sc, yaw, y, y + h, { door: true });
     const d = { group: dg, pivot, leaf, col, w, h, pos: new Vector3(x, y + h * 0.5, z), openAmt: 0, target: 0, flip: o.flip ? -1 : 1, isOpen: false, behind, onMove: null };
     d.open = (v = true, silent) => { if (d.isOpen === v) return; d.isOpen = v; d.target = v ? 1 : 0; if (!silent) AudioSys.door(v); };
     this.updaters.push((dt) => {
@@ -2011,6 +2017,8 @@ class LevelCtx {
     for (const sg of [-1, 1]) { const [mx, mz] = P(sg * mid); this.collider(mx, mz, side / 2 + 0.02, 0.08, yaw, y, y + H); }
   }
   wallDoor(x, z, yaw, o) { this.doorway(x, z, yaw, o); return this.simpleDoor(x, o.y ?? 0, z, yaw, Object.assign({ glowBehind: false }, o)); }
+  /** A level-owned interactive canvas panel (keypads, notes); disposed with the level. */
+  panel(cw, ch, ww, wh, opts) { const p = new Panel(cw, ch, ww, wh, Object.assign({ modal: false }, opts)); this.disposers.push(() => p.dispose()); return p; }
   /** Heightfield mesh from fn(x,z) (basin slopes, ramps). colorFn(x,z,y)->[r,g,b] optional. */
   terrain(x0, z0, x1, z1, cell, fn, mat, { uvs = 2, colorFn = null } = {}) {
     const nx = Math.round((x1 - x0) / cell), nz = Math.round((z1 - z0) / cell), W = nx + 1, n = W * (nz + 1);
@@ -2049,7 +2057,7 @@ class LevelCtx {
     const ent = { i, g, core, halo, base: new Vector3(x, y, z), got: false, hum: null, it: null, visible: true, phase: i * 2.1 };
     ent.hum = this.hum(g.position, mtof(degToMidi(this.theme, [2, 4, 7][i] + 7)), 0.11);
     ent.show = (v = true) => { ent.visible = v && !ent.got; g.visible = ent.visible; if (ent.hum) ent.hum.setGain(ent.visible ? 0.11 : 0); if (v) { AudioSys.chime(mtof(degToMidi(this.theme, 9 + i)), 0.18); } };
-    ent.it = this.interact({ obj: g, r: o.r || 0.45, label: o.label || 'Touch', enabled: () => ent.visible && !ent.got && (!o.locked || !o.locked()), onSelect: () => this.collect(ent) });
+    ent.it = this.interact({ obj: g, r: o.r || 0.45, range: o.range ?? 3.5, label: o.label || 'Touch', enabled: () => ent.visible && !ent.got && (!o.locked || !o.locked()), onSelect: () => this.collect(ent) });
     this.updaters.push((dt, t) => {
       if (ent.got) return; g.position.y = ent.base.y + Math.sin(t * 1.4 + ent.phase) * 0.04; core.rotation.y += dt * 1.3; core.rotation.x = Math.sin(t * 0.7 + ent.phase) * 0.4;
       halo.material.opacity = 0.7 + 0.25 * Math.sin(t * 2.2 + ent.phase); halo.scale.setScalar(0.85 + 0.16 * Math.sin(t * 2.2 + ent.phase));
@@ -2076,7 +2084,7 @@ class LevelCtx {
   exitReady() { return this.got.every(Boolean) && (!this.exitEnt || !this.exitEnt.cond || this.exitEnt.cond()); }
   readyExit() { const e = this.exitEnt; if (!e || e.ready) return; e.ready = true; setTimeout(() => toastHook('Three memories kept. The way out is open.', 5), 1800); AudioSys.chord(this.theme, [0, 4, 7, 11, 14], 'glass', 0.35, 0.12); }
   exit(o) {
-    const d = this.door(o.x, o.y ?? 0, o.z, o.yaw ?? 0, { w: o.w ?? 1.1, h: o.h ?? 2.2, color: o.color ?? 0x7a4a2a, frame: o.frame ?? 0x4e3520, glow: o.glow ?? 0xfff2d8, wall: o.wall, wallColor: o.wallColor });
+    const d = this.door(o.x, o.y ?? 0, o.z, o.yaw ?? 0, { w: o.w ?? 1.1, h: o.h ?? 2.2, color: o.color ?? 0x7a4a2a, frame: o.frame ?? 0x4e3520, glow: o.glow ?? 0xfff2d8, wall: o.wall, wallColor: o.wallColor, dynamic: o.dynamic, s: o.s });
     const halo = new Sprite(new SpriteMaterial({ map: this.tex('glow', () => TEX.glow()), color: 0xffe0a0, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0 }));
     halo.scale.set(d.w * 2.2, d.h * 1.5, 1); halo.position.set(0, d.h / 2, 0.25); d.group.add(halo);
     const ent = { door: d, cond: o.cond || null, ready: false, opening: false, halo };
@@ -2085,7 +2093,7 @@ class LevelCtx {
       obj: d.group, half: new Vector3(d.w / 2 + 0.1, d.h / 2 + 0.05, 0.4), off: new Vector3(0, d.h / 2, 0), label: 'Leave', labelFn: () => (this.exitReady() ? 'Step through' : 'Locked'),
       onSelect: () => {
         if (ent.opening) return;
-        if (!this.exitReady()) { toastHook(o.lockedMsg || (this.got.every(Boolean) ? 'Something is still undone.' : `Memories ${this.got.filter(Boolean).length} of 3. The door is waiting.`), 3.2); AudioSys.thud(0.4); Input.haptic(0.5, 60); return; }
+        if (!this.exitReady()) { toastHook((typeof o.lockedMsg === 'function' ? o.lockedMsg() : o.lockedMsg) || (this.got.every(Boolean) ? 'Something is still undone.' : `Memories ${this.got.filter(Boolean).length} of 3. The door is waiting.`), 3.2); AudioSys.thud(0.4); Input.haptic(0.5, 60); return; }
         ent.opening = true; this.exitOpenNow = true; d.open(true); Input.haptic(0.6, 200);
         setTimeout(() => Levels.complete(), 1500);
       },
@@ -2102,7 +2110,7 @@ class LevelCtx {
     let rv = null;
     if (o.mark !== false) rv = this.mark(o.x, o.y, o.z, { size: o.size ?? 0.42, yaw: o.yaw || 0, rx: o.rx || 0, glyph: o.glyph || 'star', c: o.c, max: 1, range: 9 });
     const pos = new Vector3(o.x, o.y, o.z);
-    return this.interact({ pos, r: o.r ?? 0.4, label: o.label || '✦', enabled: () => (rv ? rv.r > 0.28 : true), onSelect: () => this.foundSecret(pos) });
+    return this.interact({ pos, r: o.r ?? 0.4, range: o.range ?? 6, label: o.label || '✦', enabled: () => (rv ? rv.r > 0.28 : true), onSelect: () => this.foundSecret(pos) });
   }
   foundSecret(pos) {
     if (this.n < 0) return; const first = !Save.d.secrets[this.n];
@@ -2116,10 +2124,11 @@ class LevelCtx {
     const isF = (gx, gz) => { const r = rows[gz]; if (!r) return false; const c = r[gx]; return c !== undefined && c !== '#' && c !== ' '; };
     const X = (gx) => ox + gx * cs, Z = (gz) => oz + gz * cs, marks = {};
     for (let gz = 0; gz < H; gz++) for (let gx = 0; gx < W; gx++) { const c = rows[gz][gx]; if (c && c !== '#' && c !== '.' && c !== ' ') (marks[c] = marks[c] || []).push({ x: X(gx) + cs / 2, z: Z(gz) + cs / 2, gx, gz }); }
-    // floor & ceiling: merge runs along x
+    // floor & ceiling: merge runs along x (cells listed in o.noFC keep walls/colliders but get no floor or ceiling)
+    const drawF = (gx, gz) => isF(gx, gz) && !(o.noFC && o.noFC.includes(rows[gz][gx]));
     for (let gz = 0; gz < H; gz++) {
       let gx = 0;
-      while (gx < W) { if (!isF(gx, gz)) { gx++; continue; } let e = gx; while (isF(e + 1, gz)) e++; if (o.fb) o.fb.flat(X(gx), Z(gz), X(e + 1), Z(gz + 1), fy, o.fc ?? 0xffffff, o.fuv ?? 2, true); if (o.cb && h > 0) o.cb.flat(X(gx), Z(gz), X(e + 1), Z(gz + 1), fy + h, o.cc ?? 0xffffff, o.cuv ?? 2, false); gx = e + 1; }
+      while (gx < W) { if (!drawF(gx, gz)) { gx++; continue; } let e = gx; while (drawF(e + 1, gz)) e++; if (o.fb) o.fb.flat(X(gx), Z(gz), X(e + 1), Z(gz + 1), fy, o.fc ?? 0xffffff, o.fuv ?? 2, true); if (o.cb && h > 0) o.cb.flat(X(gx), Z(gz), X(e + 1), Z(gz + 1), fy + h, o.cc ?? 0xffffff, o.cuv ?? 2, false); gx = e + 1; }
     }
     // walls: merge runs (N/S along x, E/W along z)
     if (o.wb) {
@@ -2137,7 +2146,7 @@ class LevelCtx {
     if (o.colliders !== false) {
       const near = (gx, gz) => { for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (isF(gx + dx, gz + dz)) return true; return false; };
       for (let gz = -1; gz <= H; gz++) {
-        let gx = -1; while (gx <= W) { if (isF(gx, gz) || !near(gx, gz)) { gx++; continue; } let e = gx; while (!isF(e + 1, gz) && near(e + 1, gz) && e + 1 <= W) e++; this.box(X(gx), fy - 1, Z(gz), X(e + 1), fy + h + 1, Z(gz + 1), { noray: false, nohead: false }); gx = e + 1; }
+        let gx = -1; while (gx <= W) { if (isF(gx, gz) || !near(gx, gz)) { gx++; continue; } let e = gx; while (!isF(e + 1, gz) && near(e + 1, gz) && e + 1 <= W) e++; this.box(X(gx), fy + (o.cBot ?? -1), Z(gz), X(e + 1), fy + (o.cTop ?? h + 1), Z(gz + 1), { noray: false, nohead: false }); gx = e + 1; }
       }
     }
     const G = { W, H, cs, ox, oz, marks, isF, X, Z, cx: (gx) => X(gx) + cs / 2, cz: (gz) => Z(gz) + cs / 2, bounds: { x0: ox, x1: ox + W * cs, z0: oz, z1: oz + H * cs } };
@@ -2305,7 +2314,7 @@ const Trans = {
   phase: 'idle', t: 0, dur: 0.7, target: null, opts: null,
   start(id, o = {}) {
     if (this.phase !== 'idle') return; this.phase = 'out'; this.t = 0; this.target = id; this.opts = o; this.dur = o.dur ?? 0.7;
-    Fade.color.set(o.white ? 0xffffff : 0x000000); Journal.isOpen && Journal.close();
+    const w = o.white && Save.s.flash !== false; if (o.white && !w) this.dur = (o.dur ?? 0.7) * 1.5; Fade.color.set(w ? 0xffffff : 0x000000); Journal.isOpen && Journal.close();
   },
   update(dt) {
     if (this.phase === 'out') { this.t += dt; Fade.v = Ease.inOut(clamp(this.t / this.dur, 0, 1)); if (this.t >= this.dur) { Fade.v = 1; this.phase = 'load'; } }
@@ -2426,26 +2435,6 @@ function makeCausticMaterial(tex, wlU, skies) {
       }`,
   });
 }
-
-/* ── TEMP STUB (engine test) ── */
-Levels.register([
-  { id: 'hub', name: 'Stub hub', build(L) {
-      L.env({ fog: [0x2a1e16, 0.04], hemi: [0xffeedd, 0x443322, 1.1], key: { color: 0xffddaa, i: 8, pos: [0, 3, 0], dist: 14, follow: [0, 0.3, 0] } });
-      const fb = L.builderWith('floor', L.lambert('floorM', L.tex('floorT', () => TEX.checker({}))));
-      const wb = L.builderWith('wall', L.lambert('wallM', L.tex('wallT', () => TEX.wallpaper({}))));
-      const G = L.grid(['#########', '#.......#', '#.......#', '#...S...#', '#.......#', '#########'], { cs: 2.5, h: 3, fb, cb: L.b('flat'), wb, fuv: 2, wuv: 2 });
-      L.bounds = G.bounds; const s = G.marks.S[0]; L.spawn = { x: s.x, y: 0, z: s.z, yaw: 0 };
-      L.sky({}); L.audio({ noise: [{ type: 'pink', freq: 400, gain: 0.05 }], hum: { f0: 60, gain: 0.02 } }, { root: 57, scale: 'major', tempo: 60, seed: 3 });
-      L.fragment(0, s.x - 2, 1.2, s.z - 3); L.fragment(1, s.x + 2, 1.2, s.z - 3); L.fragment(2, s.x, 1.2, s.z + 3);
-      L.exit({ x: s.x, z: G.Z(0) + 0.15, yaw: 0 });
-      L.dust(200, { x0: -10, x1: 10, y0: 0, y1: 3, z0: -8, z1: 8 });
-      L.ray(s.x, 3, s.z - 1, 0.6, 3);
-      const cube = new Mesh(new BoxGeometry(0.5, 0.5, 0.5), new MeshLambertMaterial({ color: 0xcc8844 })); cube.position.set(s.x + 1, 0.25, s.z + 1); L.add(cube);
-      L.body(cube, [0.25, 0.25, 0.25], { collider: true });
-      L.secret({ x: s.x + 3, y: 1, z: s.z, yaw: -Math.PI / 2 });
-    } },
-]);
-for (let i = 0; i < 12; i++) Levels.register([{ id: i, name: 'stub ' + i, build(L) { Levels.defs.get('hub').build(L); } }]);
 
 /* ═════════════════════════════════════════════════════════════════════════════════════════════
    12. HUB — THE WAITING ROOM: twelve doors around a quiet round room. Also the tutorial spot.
@@ -2772,8 +2761,8 @@ Levels.register([{
     const raftMat = L.lambert('raftM', L.tex('raftT', () => TEX.wood({ base: '#c9a878', planks: 5, size: 256 })), { vertexColors: false });
     const raft = new Mesh(L.geo('raftG', () => new BoxGeometry(2.6, 0.16, 2.6)), raftMat); raft.position.set(0, 0, -9.7); L.add(raft);
     const raftCol = L.box(-1.3, -3, -11, 1.3, 0.05, -8.4, {});
-    wb.box(2.8, -0.45, -9.7, 3.0, 2.1, 2.6, 0xffffff, 3); L.box(1.3, -3, -11, 4.3, 0.6, -8.4); B.box(2.8, 0.605, -9.7, 3.02, 0.02, 2.62, 0xf0d060, 1); B.box(2.8, 0.71, -8.5, 3.0, 0.2, 0.04, 0xd94a3a, 1);
-    B.box(2.8, 0.66, -8.0, 0.5, 0.08, 2.4, 0xe8e2d0, 1); L.sign('DIVING PLATFORM', 2.8, 2.3, Z0 + 0.06, 2.4, 0.4, { fg: '#0d5a68', bg: '#eef5f3', border: '#3aa6b5', size: 44, cw: 768, yaw: 0 });
+    wb.box(2.8, -0.45, -9.7, 3.0, 2.1, 2.6, 0xffffff, 3); L.box(1.3, -3, -11, 4.3, 0.6, -8.4); L.box(1.3, -3, -8.45, 4.35, 1.9, -8.35, { noray: true }); L.box(4.3, -3, -11, 4.4, 1.9, -8.35, { noray: true }); B.box(2.8, 0.605, -9.7, 3.02, 0.02, 2.62, 0xf0d060, 1); B.box(2.8, 0.71, -8.5, 3.0, 0.2, 0.04, 0xd94a3a, 1);
+    for (let i = 0; i <= 6; i++) { B.box(1.3 + i * 0.5, 1.05, -8.4, 0.05, 0.9, 0.05, 0xd0d8d8, 1); } B.box(2.8, 1.5, -8.4, 3.1, 0.05, 0.05, 0xd0d8d8, 1); B.box(4.35, 1.5, -9.7, 0.05, 0.05, 2.7, 0xd0d8d8, 1); for (let i = 0; i <= 5; i++) B.box(4.35, 1.05, -11 + i * 0.5, 0.05, 0.9, 0.05, 0xd0d8d8, 1); L.sign('DIVING PLATFORM', 2.8, 2.3, Z0 + 0.06, 2.4, 0.4, { fg: '#0d5a68', bg: '#eef5f3', border: '#3aa6b5', size: 44, cw: 768, yaw: 0 });
     B.torus(-W + 0.06, 2.6, -4, 0.32, 0.09, 0xe9553f, 0, Math.PI / 2, 0); B.torus(W - 0.06, 2.6, 4, 0.32, 0.09, 0xe9553f, 0, Math.PI / 2, 0);
     const hx = -3, hz = -3, hatch = new Group(); hatch.position.set(hx, -1.3, hz); L.add(hatch);
     const dark = new Mesh(L.geo('cyl1', () => new CylinderGeometry(0.75, 0.75, 0.02, 20)), L.mat('darkM', () => new MeshBasicMaterial({ color: 0x06222a }))); dark.position.y = 0.016; hatch.add(dark);
@@ -2796,7 +2785,7 @@ Levels.register([{
     }
     const flowSnd = L.emitter({ x: 0, y: 1, z: 6 }, { type: 'pink', filter: 'bandpass', freq: 700, q: 0.4, gain: 0, ref: 6 });
     // ── fragments ──
-    const fA = L.fragment(0, 3, 0.65, 13.6), fB = L.fragment(1, 2.8, 1.6, -9.7), fC = L.fragment(2, hx, -0.65, hz, { hidden: true });
+    const fA = L.fragment(0, 3, 0.65, 13.6), fB = L.fragment(1, 2.8, 1.5, -9.7, { range: 1.7 }), fC = L.fragment(2, hx, -0.65, hz, { hidden: true });
     const tube = new Mesh(L.geo('tubeG', () => new TorusGeometry(0.5, 0.17, 10, 22).rotateX(Math.PI / 2)), L.mat('tubeM', () => new MeshLambertMaterial({ color: 0xff8a7a }))); tube.position.set(3, 0, 13.6); L.add(tube);
     L.interact({ obj: hatch, r: 1.0, labelFn: () => (hatchOpen ? '' : wl < -0.95 ? 'Open the hatch' : 'Sealed by the water'), enabled: () => !hatchOpen, onSelect: () => { if (wl >= -0.95) { toastHook('The hatch is sealed under the water.', 3); AudioSys.thud(0.3); return; } hatchOpen = true; gold.visible = true; AudioSys.door(true); fC.show(true); L.progress(); } });
     // ── secret: a yellow duck bobbing in the far corner ──
@@ -3107,6 +3096,981 @@ Levels.register([{
       if (shutterUp && toyShutter) toyShutter.scale.y = damp(toyShutter.scale.y, 0.03, 2.4, dt);
       if (wished) { wk = damp(wk, 1, 0.7, dt); fw.position.y = 0.04 + wk * 0.5; for (let i = 0; i < 30; i++) { const v = jetV[i], ph = ((t * 0.55 + v[3] * 0.5) % 1.6); jet.pos[i * 3] = v[0] * ph; jet.pos[i * 3 + 1] = 2.7 + v[1] * ph - 4.9 * ph * ph; jet.pos[i * 3 + 2] = v[2] * ph; } jet.geo.attributes.position.needsUpdate = true; jet.mesh.visible = true; } else jet.mesh.visible = false;
     });
+  },
+}]);
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════
+   LEVEL 5 — STAIRWELL LOOP.  Concrete, red exit lights, stairs that never end.
+   Only five turns of stairs exist. Whenever you drift a full turn (12 m) the whole rig is shifted by exactly one
+   period and the floor numbers are re-labelled — geometry is periodic, so the wrap is invisible.
+   Count floors: memories wait on floors 3, 6 and −3; the real exit (floor 9) is the door that is playing music.
+   ═════════════════════════════════════════════════════════════════════════════════════════════ */
+Levels.register([{
+  id: 4, name: 'Stairwell Loop',
+  build(L) {
+    const FH = 3, NL = 21, Y0 = -24, YT = 36, S = 5, V = 3.4, C = 4.2, PERIOD = 12;
+    L.env({ fog: [0x151819, 0.068], hemi: [0x8a9298, 0x2c2e32, 0.5], key: { color: 0xd0e2d0, i: 4.4, pos: [0, 0, 0], dist: 11, decay: 2, follow: [0, 0.9, 0] }, haze: [0xa0b0a8, 0.03] });
+    L.fragColor = 0xffe8c8; L.stepMax = 0.5;
+    const cw = L.builderWith('conc', L.lambert('concM', L.tex('concT', () => TEX.concrete({ base: '#84857f', seed: 12, stains: 0.9 }))));
+    const B = L.b('flat'), GB = L.b('glowb'), gf = L.glow(120);
+    // shaft walls, floor, ceiling (inner faces)
+    cw.wall(-S, -S, S, -S, Y0, YT, 0, 1, 0xffffff, 3, 0); cw.wall(S, -S, S, S, Y0, YT, -1, 0, 0xffffff, 3, 0); cw.wall(-S, S, S, S, Y0, YT, 0, -1, 0xffffff, 3, 0); cw.wall(-S, -S, -S, S, Y0, YT, 1, 0, 0xffffff, 3, 0);
+    cw.flat(-S, -S, S, S, Y0, 0xbfbfb8, 3, true); cw.flat(-S, -S, S, S, YT, 0xa0a09a, 3, false);
+    L.box(-S - 2, -1e3, -S - 2, S + 2, 1e3, -S); L.box(S, -1e3, -S, S + 2, 1e3, S); L.box(-S - 2, -1e3, S, S + 2, 1e3, S + 2); L.box(-S - 2, -1e3, -S, -S, 1e3, S);
+    L.box(-V, -1e3, -V, V, 1e3, V, { noray: true });                                       // the open void: see through it, cannot enter it
+    const Yj = (j) => FH * j - 24, kOf = (j) => (((j - 8) % 4) + 4) % 4;
+    const CORN = [[-C, -C], [C, -C], [C, C], [-C, C]], FLT = [{ s: [-V, -C], d: [1, 0], in: [0, 1] }, { s: [C, -V], d: [0, 1], in: [-1, 0] }, { s: [V, C], d: [-1, 0], in: [0, -1] }, { s: [-C, V], d: [0, -1], in: [1, 0] }];
+    const DOORYAW = [0, -Math.PI / 2, Math.PI, Math.PI / 2], NORM = [[0, 1], [-1, 0], [0, -1], [1, 0]], RIGHT = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+    const stairC = 0x8f8f89, railC = 0x2a3a3a;
+    for (let j = 0; j <= 20; j++) {
+      const k = kOf(j), y = Yj(j), [cx, cz] = CORN[k];
+      B.box(cx, y - 0.125, cz, 1.6, 0.25, 1.6, 0x8a8a84, 2);                                    // landing pad
+      // bare caged bulb, exit light, decor door, number plate backing
+      GB.sphere(cx * 0.55, y + 2.65, cz * 0.55, 0.08, 0xfff0c8, 1, 1, 1, 6); gf.add(cx * 0.55, y + 2.65, cz * 0.55, 1.9, 0xffe6b0, 0.06, 0);
+      B.cyl(cx * 0.55, y + 2.9, cz * 0.55, 0.01, 0.01, 0.5, 4, 0x222222);
+      const nx = NORM[k][0], nz = NORM[k][1], wx = k === 1 ? S : k === 3 ? -S : cx, wz = k === 0 ? -S : k === 2 ? S : cz;
+      Props.doorStatic(B, wx, y, wz, DOORYAW[k], 1.0, 2.1, { color: 0x3a5a4a, frame: 0x2a3a34 });
+      B.box(wx + nx * 0.03, y + 2.62, wz + nz * 0.03, Math.abs(nz) * 1.4 + Math.abs(nx) * 0.05, 0.5, Math.abs(nx) * 1.4 + Math.abs(nz) * 0.05, 0x1c1e20, 1);
+      GB.box(wx + nx * 0.06 + RIGHT[k][0] * 0.9, y + 2.3, wz + nz * 0.06 + RIGHT[k][1] * 0.9, Math.abs(nz) * 0.42 + Math.abs(nx) * 0.02, 0.16, Math.abs(nx) * 0.42 + Math.abs(nz) * 0.02, 0xff3a2a); gf.add(wx + nx * 0.3 + RIGHT[k][0] * 0.9, y + 2.3, wz + nz * 0.3 + RIGHT[k][1] * 0.9, 0.9, 0xff4a3a, 0.08, 0);
+    }
+    for (let j = 0; j < 20; j++) {
+      const k = kOf(j), f = FLT[k], y = Yj(j), NS = 12, run = 2 * V / NS, th = Math.atan2(FH, 2 * V);
+      for (let i = 0; i < NS; i++) {
+        const t = (i + 0.5) / NS, px = f.s[0] + f.d[0] * 2 * V * t, pz = f.s[1] + f.d[1] * 2 * V * t, yt = y + (FH * (i + 1)) / NS;
+        B.box(px, yt - 0.125, pz, Math.abs(f.d[0]) * run + Math.abs(f.d[1]) * 1.6, 0.25, Math.abs(f.d[1]) * run + Math.abs(f.d[0]) * 1.6, stairC, 2);
+        const rx = px + f.in[0] * 0.72, rz = pz + f.in[1] * 0.72; B.box(rx, yt + 0.45, rz, 0.04, 0.9, 0.04, railC, 1);
+      }
+      const mx = f.s[0] + f.d[0] * V, mz = f.s[1] + f.d[1] * V, my = y + FH / 2 - 0.3, sl = Math.hypot(2 * V, FH);
+      B.push(mx, my, mz, 0, f.d[1] !== 0 ? -f.d[1] * th : 0, f.d[0] !== 0 ? f.d[0] * th : 0); B.box(0, 0, 0, Math.abs(f.d[0]) * sl + Math.abs(f.d[1]) * 1.6, 0.25, Math.abs(f.d[1]) * sl + Math.abs(f.d[0]) * 1.6, 0x6f706a, 2); B.pop();
+      B.push(mx + f.in[0] * 0.72, y + FH / 2 + 0.92, mz + f.in[1] * 0.72, 0, f.d[1] !== 0 ? -f.d[1] * th : 0, f.d[0] !== 0 ? f.d[0] * th : 0); B.box(0, 0, 0, Math.abs(f.d[0]) * sl + Math.abs(f.d[1]) * 0.06, 0.06, Math.abs(f.d[1]) * sl + Math.abs(f.d[0]) * 0.06, railC, 1); B.pop();
+    }
+    // floor-number plates: one mesh, 3 glyph quads per landing, UVs rewritten whenever the well wraps
+    const digTex = L.tex('digs', () => cTex(1408, 128, (g) => { g.clearRect(0, 0, 1408, 128); g.font = '700 104px "Courier New", monospace'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#ff6a58'; g.shadowColor = '#ff2a10'; g.shadowBlur = 14; '0123456789-'.split('').forEach((ch, i) => g.fillText(ch, i * 128 + 64, 68)); }, { repeat: false, aniso: 4 }));
+    const P = new Float32Array(NL * 3 * 4 * 3), U = new Float32Array(NL * 3 * 4 * 2), IX = [];
+    for (let j = 0; j < NL; j++) {
+      const k = kOf(j), y = Yj(j), nx = NORM[k][0], nz = NORM[k][1], rx = RIGHT[k][0], rz = RIGHT[k][1], wx = (k === 1 ? S : k === 3 ? -S : CORN[k][0]) + nx * 0.075, wz = (k === 0 ? -S : k === 2 ? S : CORN[k][1]) + nz * 0.075;
+      for (let c = 0; c < 3; c++) {
+        const off = (c - 1) * 0.42, cxp = wx + rx * off, czp = wz + rz * off, hw = 0.21, y0 = y + 2.42, y1 = y + 2.82, b = (j * 3 + c) * 4;
+        const pts = [[cxp - rx * hw, y0, czp - rz * hw], [cxp + rx * hw, y0, czp + rz * hw], [cxp + rx * hw, y1, czp + rz * hw], [cxp - rx * hw, y1, czp - rz * hw]];
+        pts.forEach((p, q) => { P[(b + q) * 3] = p[0]; P[(b + q) * 3 + 1] = p[1]; P[(b + q) * 3 + 2] = p[2]; });
+        IX.push(b, b + 1, b + 2, b, b + 2, b + 3);
+      }
+    }
+    const lg = new BufferGeometry(); lg.setAttribute('position', new BufferAttribute(P, 3)); lg.setAttribute('uv', new BufferAttribute(U, 2)); lg.setIndex(IX); lg.computeBoundingSphere();
+    const labels = new Mesh(lg, new MeshBasicMaterial({ map: digTex, transparent: true, depthWrite: false, side: DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); L.add(labels);
+    let base = 0;
+    const glyph = (ch) => (ch === '-' ? 10 : ch === ' ' ? -1 : +ch);
+    function relabel() {
+      for (let j = 0; j < NL; j++) {
+        const n = base - (j - 8), str = String(Math.abs(n)), chars = (n < 0 ? '-' + str : str).padStart(3, ' ');
+        for (let c = 0; c < 3; c++) { const g = glyph(chars[c]), b = (j * 3 + c) * 4, u0 = g < 0 ? 0.999 : g / 11, u1 = g < 0 ? 1 : (g + 1) / 11; U.set([u0, 0, u1, 0, u1, 1, u0, 1], b * 2); }
+      }
+      lg.attributes.uv.needsUpdate = true;
+    }
+    relabel();
+    // where does floor n live right now?  landing j = 8 + base − n
+    const jOf = (n) => 8 + base - n, inRange = (j) => j >= 0 && j <= 20;
+    const posOf = (n, up = 1.25) => { const j = jOf(n), k = kOf(j), [cx, cz] = CORN[k]; return { j, k, x: cx * 0.78, y: Yj(j) + up, z: cz * 0.78, wx: k === 1 ? S : k === 3 ? -S : cx, wz: k === 0 ? -S : k === 2 ? S : cz }; };
+    // ── memories on floors 3, 6, −3 ──
+    const FLOORS = [3, 6, -3], frags = FLOORS.map((n, i) => L.fragment(i, 0, 0, 0));
+    // ── the real exit door (floor 9): a movable door standing just proud of the wall, playing a music box ──
+    const ex = L.exit({ x: 0, y: -200, z: 0, yaw: 0, w: 1.0, h: 2.1, color: 0x3a5a4a, frame: 0x2a3a34, dynamic: true, glow: 0xfff0d0, lockedMsg: 'The door hums a tune. Not yet — there are memories still upstairs, or downstairs.' });
+    const ed = ex.door, ecol = ed.col;
+    // ── secret: the door on floor 0 that has never opened ──
+    const secretPos = new Vector3(), sGhost = L.mark(-C, 0, -S + 0.05, { glyph: 'star', size: 0.5, yaw: 0, c: '#ffe0a0', max: 1, range: 6 });
+    L.interact({ pos: secretPos, r: 0.5, label: '✦', enabled: () => sGhost.r > 0.28, onSelect: () => L.foundSecret(secretPos) });
+    // ── audio: music behind the true door ──
+    const pan = AudioSys.ok ? AudioSys.panner({ x: 0, y: 0, z: 0 }, 2.5, 1.25) : null; if (pan) pan.connect(AudioSys.busSfx); let tune = 1.0, ti = 0; const TUNE = [4, 2, 0, 2, 4, 4, 4, null, 2, 2, 2, null, 4, 7, 7, null];
+    L.sign('THE NINTH FLOOR\nwas always grandmother’s', -2.3, 1.75, -S + 0.06, 1.7, 0.5, { fg: '#d8c8a8', bg: 'rgba(20,20,20,.55)', size: 38, cw: 512 });
+    // ── ambience ──
+    L.audio({
+      noise: [{ type: 'brown', filter: 'lowpass', freq: 160, gain: 0.12 }, { type: 'pink', filter: 'bandpass', freq: 900, q: 1.2, gain: 0.02, lfo: { rate: 0.04, depth: 0.015 } }],
+      hum: { f0: 100, harm: [1, 2, 3], gain: 0.012, lp: 700, buzz: 0.3 }, drone: [{ f: 41, gain: 0.05, lp: 130, lfo: 0.03 }],
+      events: [{ every: [6, 14], fn: (A) => { const p = A.panner({ x: (Math.random() - 0.5) * 8, y: Head.world.y + (Math.random() - 0.5) * 30, z: (Math.random() - 0.5) * 8 }, 2, 0.9); p.connect(A.busSfx); A.thud(0.18); A.noiseBurst(A.ctx.currentTime, 0.6, 'lowpass', 500, 120, 0.05, A.busSfx, p); } }],
+    }, { root: 50, scale: 'phrygian', tempo: 42, timbre: 'piano', seed: 77, density: 0.6, vol: 0.7, sparse: 0.4, motif: [4, null, 2, null, 0, 2, null, null] });
+    L.spawn = { x: -C + 0.1, y: 0, z: -C + 0.1, yaw: Math.PI }; L.bounds = { x0: -S, x1: S, z0: -S, z1: S };
+    L.floorFn = (x, z, ref) => {
+      const ax = Math.abs(x), az = Math.abs(z); const r0 = ref === undefined ? 0 : ref; let y;
+      if (ax < V && az < V) return r0;
+      if (x < -V && z < -V) y = 0; else if (x > V && z < -V) y = 3; else if (x > V && z > V) y = 6; else if (x < -V && z > V) y = 9;
+      else if (z < -V) y = 3 * (x + V) / (2 * V); else if (x > V) y = 3 + 3 * (z + V) / (2 * V); else if (z > V) y = 6 + 3 * (V - x) / (2 * V); else y = 9 + 3 * (V - z) / (2 * V);
+      return y + PERIOD * Math.round((r0 - y) / PERIOD);
+    };
+    L.killY = -400;
+    L.hint(() => { for (let i = 0; i < 3; i++) if (!frags[i].got) { const p = posOf(FLOORS[i]); return new Vector3(p.x, p.y, p.z); } const p = posOf(9, 1.2); return new Vector3(p.wx * 0.9, p.y, p.wz * 0.9); });
+    L.onUpdate((dt, t) => {
+      // seamless wrap by exactly one period
+      const fy = Player.floorY;
+      if (fy > 18) { Player.shift(0, -PERIOD, 0); base -= 4; relabel(); } else if (fy < -6) { Player.shift(0, PERIOD, 0); base += 4; relabel(); }
+      // place memories on their floors
+      for (let i = 0; i < 3; i++) {
+        const f = frags[i]; if (f.got) continue; const p = posOf(FLOORS[i]), ok = inRange(p.j);
+        f.base.set(p.x, p.y, p.z); f.g.position.x = p.x; f.g.position.z = p.z; f.g.visible = ok; f.visible = ok;
+        if (f.hum) { f.hum.setPos(f.g.position); if (f.okPrev !== ok) { f.okPrev = ok; f.hum.setGain(ok ? 0.11 : 0.0); } }
+      }
+      // the real exit door and its music
+      const q = posOf(9, 0), okE = inRange(q.j), k = q.k, yaw = DOORYAW[k];
+      ed.group.visible = okE; ed.group.position.set(q.wx + NORM[k][0] * 0.32, Yj(q.j), q.wz + NORM[k][1] * 0.32); ed.group.rotation.y = yaw; ed.pos.set(ed.group.position.x, ed.group.position.y + 1, ed.group.position.z);
+      if (ecol) { ecol.cx = ed.group.position.x; ecol.cz = ed.group.position.z; ecol.ry = yaw; ecol.cs = Math.cos(yaw); ecol.sn = Math.sin(yaw); ecol.y0 = ed.group.position.y; ecol.y1 = ed.group.position.y + 2.1; if (!okE) ecol.enabled = false; else ecol.enabled = ed.openAmt < 0.55; }
+      ex.door.it.dead = !okE;
+      if (pan) AudioSys.setPanPos(pan, { x: ed.group.position.x, y: Yj(q.j) + 1.2, z: ed.group.position.z });
+      tune -= dt; if (tune <= 0 && AudioSys.ok && !ex.opening) { const d = TUNE[ti++ % TUNE.length]; tune = 0.42; if (d !== null) AudioSys.note(degToMidi(L.theme, d + 7), AudioSys.ctx.currentTime, 1.0, 0.5, 'box', AudioSys.busSfx, pan); }
+      // the secret door at floor zero
+      const s0 = posOf(0, 1.4), okS = inRange(s0.j) && s0.k === 0;
+      secretPos.set(-C, Yj(s0.j) + 1.4, -S + 0.05); sGhost.mesh.position.copy(secretPos); sGhost.pos.copy(secretPos); if (!okS) sGhost.always = false; sGhost.range = okS ? 6 : 0.01;
+    });
+  },
+}]);
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════
+   LEVEL 6 — CHILDHOOD BEDROOM (giant scale).  The room is 5.5× life size, so you feel about 30 cm tall.
+   Pull toy blocks (hold TRIGGER) and drop them into the chalk-blue outlines to build a staircase up to the bed
+   (memory on the pillow, memory on the windowsill). Memory 1 waits by the toy train.
+   ═════════════════════════════════════════════════════════════════════════════════════════════ */
+Levels.register([{
+  id: 5, name: 'Childhood Bedroom',
+  build(L) {
+    const G = 5.5, RX = 2.1, RZ = 2.5, X = RX * G, Z = RZ * G, H = 2.6 * G;
+    L.env({ fog: [0x1a2140, 0.011], hemi: [0x93a4dc, 0x3c3350, 0.6], key: { color: 0xa8c0ff, i: 0.6, pos: [-30, 40, -40], dist: 0, decay: 0 }, fill: { color: 0xffb070, i: 90, pos: [-X + 1.2, 1.9, -1.2], dist: 70, decay: 2 }, haze: [0x8aa0e0, 0.03] });
+    L.fragColor = 0xfff0d8; L.stepMax = 1.15; L.speedMul = 2.3;
+    const fb = L.builderWith('floor', L.lambert('floorM', L.tex('floorT', () => TEX.wood({ base: '#b08458', planks: 8, size: 512, seed: 5 }))));
+    const wb = L.builderWith('wall', L.lambert('wallM', L.tex('wallT', () => TEX.wallpaper({ bg: '#bccbe4', fg: '#9fb4d8', style: 'floral', wear: 0.3, seed: 8 })))), cb = L.builderWith('ceil', L.lambert('ceilM', L.tex('ceilT', () => TEX.plaster({ base: '#7f88a8', seed: 3, cracks: 0 }))));
+    const B = L.b('flat'), GB = L.b('glowb'), gf = L.glow(140);
+    fb.flat(-X, -Z, X, Z, 0, 0xffffff, 9, true); cb.flat(-X, -Z, X, Z, H, 0xffffff, 12, false);
+    wb.wall(-X, -Z, X, -Z, 0, H, 0, 1, 0xffffff, 9, 0); wb.wall(X, -Z, X, Z, 0, H, -1, 0, 0xffffff, 9, 0); wb.wall(-X, Z, X, Z, 0, H, 0, -1, 0xffffff, 9, 0);
+    const DZ = 7.5; L.doorway(-X, DZ, Math.PI / 2, { cs: 2 * (Z - DZ), wallH: H, w: 5, h: 10.5, wb, wuv: 9 }); wb.wall(-X, -Z, -X, DZ - (Z - DZ), 0, H, 1, 0, 0xffffff, 9, 0);
+    L.box(-X - 3, -3, -Z - 3, X + 3, H, -Z); L.box(X, -3, -Z, X + 3, H, Z); L.box(-X - 3, -3, Z, X + 3, H, Z + 3); L.box(-X - 3, -3, -Z, -X, H, Z);
+    const bx = (x0, z0, x1, z1, h, o) => L.box(x0 * G, 0, z0 * G, x1 * G, h * G, z1 * G, o);
+    // baseboards (giant)
+    B.box(0, 0.5, -Z + 0.12, 2 * X, 1.0, 0.24, 0xe8e0d0, 4); B.box(0, 0.5, Z - 0.12, 2 * X, 1.0, 0.24, 0xe8e0d0, 4); B.box(X - 0.12, 0.5, 0, 0.24, 1.0, 2 * Z, 0xe8e0d0, 4); B.box(-X + 0.12, 0.5, -4.775, 0.24, 1.0, 17.95, 0xe8e0d0, 4); B.box(-X + 0.12, 0.5, 12.275, 0.24, 1.0, 2.95, 0xe8e0d0, 4);
+    // ── furniture, authored in real metres then scaled ×G ──
+    B.push(0, 0, 0, 0, 0, 0, G);
+    const wood = 0x9a6a3e, lite = 0xc9a878;
+    // bed
+    B.box(0.9, 0.2, -1.5, 1.04, 0.26, 2.04, wood, 1); for (const sx of [-1, 1]) for (const sz of [-1, 1]) B.box(0.9 + sx * 0.5, 0.25, -1.5 + sz * 1.0, 0.07, 0.5, 0.07, wood, 1);
+    B.box(0.9, 0.78, -2.47, 1.04, 0.95, 0.06, wood, 1); B.box(0.9, 0.42, -1.5, 0.98, 0.22, 1.94, 0xe6dcc8, 1); B.box(0.9, 0.5, -0.95, 1.0, 0.1, 1.25, 0x5a7ab8, 1); B.box(0.9, 0.52, -0.33, 1.0, 0.02, 0.06, 0xf0e8d0, 1); B.box(0.9, 0.58, -2.15, 0.62, 0.12, 0.38, 0xf6f2ea, 1);
+    for (let i = 0; i < 4; i++) B.box(0.9 - 0.36 + i * 0.24, 0.56, -0.7, 0.16, 0.02, 1.0, i % 2 ? 0x4a6aa8 : 0x6a8ac8, 1);
+    // window, sill, curtain rod
+    GB.box(0.9, 1.25, -2.485, 0.86, 1.0, 0.02, 0xa8c8ff); for (const [dx, dy, sx, sy] of [[0, 1.76, 0.98, 0.06], [0, 0.74, 0.98, 0.06], [-0.46, 1.25, 0.06, 1.1], [0.46, 1.25, 0.06, 1.1], [0, 1.25, 0.04, 1.0], [0, 1.25, 0.86, 0.04]]) B.box(0.9 + dx, dy, -2.47, sx, sy, 0.06, 0xf4ecda, 1);
+    B.box(0.9, 0.72, -2.4, 1.02, 0.04, 0.22, 0xf4ecda, 1); B.box(0.9, 1.9, -2.42, 1.5, 0.03, 0.03, 0x6a4a2a, 1);
+    gf.add(0.9 * G, 1.25 * G, -Z + 0.6, 9, 0x9fc0ff, 0.02, 0); gf.add(1.05 * G, 1.5 * G, -Z + 0.5, 3.4, 0xf4f8ff, 0.03, 0);
+    // toy chest, rug, train
+    B.box(-1.7, 0.2, -0.8, 0.7, 0.4, 0.42, 0x7a5aa0, 1); B.box(-1.7, 0.42, -0.85, 0.72, 0.06, 0.44, 0xe0b040, 1); B.box(-1.7, 0.45, -0.6, 0.24, 0.1, 0.06, 0xd0d0d0, 1);
+    B.cyl(-0.7, 0.004, 0.75, 0.85, 0.85, 0.008, 28, 0x8a4a4a); B.cyl(-0.7, 0.008, 0.75, 0.62, 0.62, 0.008, 28, 0xd8b078); B.cyl(-0.7, 0.012, 0.75, 0.4, 0.4, 0.008, 28, 0x8a4a4a);
+    for (let i = 0; i < 28; i++) { const a = (i / 28) * TAU; B.push(-0.7 + Math.cos(a) * 0.5, 0.018, 0.75 + Math.sin(a) * 0.5, -a, 0, 0); B.box(0, 0, 0, 0.03, 0.012, 0.07, 0x4a3a2a, 1); B.pop(); }
+    for (let i = 0; i < 4; i++) { const a = 0.2 + i * 0.16; B.push(-0.7 + Math.cos(a) * 0.5, 0.06, 0.75 + Math.sin(a) * 0.5, -a + Math.PI / 2, 0, 0); B.box(0, 0, 0, 0.09, 0.07, 0.14, [0xd94a3a, 0x3f7fd0, 0xe9d24a, 0x4aa35a][i], 1); if (i === 0) B.box(0, 0.06, -0.03, 0.06, 0.06, 0.06, 0x3a3a3a, 1); B.pop(); }
+    B.sphere(-1.15, 0.18, 1.15, 0.13, 0xb8875a, 1, 1, 1, 8); B.sphere(-1.15, 0.36, 1.13, 0.09, 0xb8875a, 1, 1, 1, 8); B.sphere(-1.22, 0.42, 1.12, 0.035, 0xb8875a, 1, 1, 1, 6); B.sphere(-1.08, 0.42, 1.12, 0.035, 0xb8875a, 1, 1, 1, 6);
+    // wardrobe, desk, chair, shelf, dollhouse
+    B.box(1.75, 1.0, 0.7, 0.55, 2.0, 1.1, lite, 1); B.box(1.47, 1.0, 0.7, 0.02, 1.9, 0.02, 0x6a4a2a, 1); B.sphere(1.46, 1.0, 0.6, 0.02, 0xc9a24a, 1, 1, 1, 5); B.sphere(1.46, 1.0, 0.8, 0.02, 0xc9a24a, 1, 1, 1, 5);
+    Props.table(B, -1.55, 2.0, 1.0, 0.5, 0.72, 0, { top: lite }); Props.chair(B, -1.0, 1.7, -1.2, { seat: 0x4a6aa8 }); B.box(-1.7, 0.78, 2.0, 0.14, 0.12, 0.2, 0xd94a3a, 1); B.box(-1.5, 0.76, 1.95, 0.22, 0.05, 0.3, 0xf0e8d0, 1); GB.sphere(-1.85, 0.98, 1.85, 0.06, 0xffe0a0, 1, 1, 1, 6);
+    Props.shelf(B, 0.4, 2.42, Math.PI, 0.9, 1.4, 0.3, { rows: 4, seed: 3 });
+    B.box(-0.3, 0.3, -1.85, 0.7, 0.6, 0.5, 0xe8b0a8, 1); B.quad([-0.68, 0.6, -1.58, 0.08, 0.6, -1.58, 0.08, 0.95, -1.85, -0.68, 0.95, -1.85], [0, 0.6, 0.8], [0, 0, 1, 0, 1, 1, 0, 1], 0x8a4a4a, 1); B.quad([0.08, 0.6, -2.12, -0.68, 0.6, -2.12, -0.68, 0.95, -1.85, 0.08, 0.95, -1.85], [0, 0.6, -0.8], [0, 0, 1, 0, 1, 1, 0, 1], 0x7a3a3a, 1); GB.box(-0.3, 0.32, -1.59, 0.5, 0.22, 0.01, 0xffd890);
+    // nightlight
+    GB.box(-RX + 0.03, 0.3, -0.22, 0.05, 0.12, 0.08, 0xffc880); gf.add((-RX + 0.1) * G, 0.3 * G, -0.22 * G, 4.6, 0xffb060, 0.04, 0);
+    B.pop();
+    // colliders (giant units)
+    L.box(0.4 * G, 0, -2.5 * G, 1.4 * G, 0.55 * G, -0.5 * G);
+    L.box(0.42 * G, 0.6 * G, -2.5 * G, 1.38 * G, 0.72 * G, -2.28 * G);                       // the windowsill (a step from the bed)
+    bx(-2.05, -1.0, -1.35, -0.6, 0.45); bx(1.47, 0.15, 2.05, 1.25, 2.0); bx(-2.05, 1.75, -1.05, 2.25, 0.75); bx(-0.65, -2.1, 0.05, -1.6, 0.6); bx(-0.05, 2.25, 0.85, 2.5, 1.4);
+    // curtains that breathe
+    const curtains = [], cm = L.mat('curtM', () => new MeshLambertMaterial({ color: 0x8a6aa0, side: DoubleSide }));
+    for (const cx of [2.55, 7.35]) { const g = new PlaneGeometry(1.9, 8.2, 6, 12); const m = new Mesh(g, cm); m.position.set(cx, 8.6, -Z + 0.35); L.add(m); curtains.push({ g, m, base: Float32Array.from(g.attributes.position.array), ph: cx }); }
+    // ── crayon drawings & the growth chart ──
+    const DRW = L.builderWith('draw', L.mat('drawM', () => new MeshBasicMaterial({ map: L.tex('drawings', () => TEX.drawings({ seed: 51 })), vertexColors: true })), false, false), r = makeRng(12);
+    for (let i = 0; i < 12; i++) { const col = i % 4, row = (i >> 2) % 4, u0 = col / 4, v1 = 1 - row / 4, z = -Z + 4 + (i % 6) * 3.7 + r.range(-0.3, 0.3), y = 4.6 + r.range(-0.5, 1.6) + (i >= 6 ? 3.4 : 0), s = 1.6; if (z > 3.8 && z < 11.6 && y < 11.5 && i < 6) continue; DRW.quad([X - 0.02, y - s, z - s, X - 0.02, y - s, z + s, X - 0.02, y + s, z + s, X - 0.02, y + s, z - s], [-1, 0, 0], [u0, v1 - 0.25, u0 + 0.25, v1 - 0.25, u0 + 0.25, v1, u0, v1], 0xffffff, 1); }
+    for (let i = 0; i < 6; i++) B.box(-X + 0.06, 0.55 + i * 0.23, 11.6, 0.05, 0.05, 0.9, 0x5a3a20, 1);
+    B.box(-X + 0.06, 0.4, 11.6, 0.05, 1.5, 0.07, 0x7a5a3a, 1);
+    L.secret({ x: -X + 0.09, y: 1.68, z: 11.6, glyph: 'hand', yaw: Math.PI / 2, size: 0.55, r: 0.5, c: '#ffe6a0' });
+    // ceiling stars (plastic, glow-in-the-dark)
+    for (let i = 0; i < 90; i++) gf.add(r.range(-X + 1, X - 1), H - 0.15, r.range(-Z + 1, Z - 1), r.range(0.5, 1.1), r() < 0.8 ? 0xcfffc0 : 0xf4ffe8, 0.12, 0);
+    L.dust(160, { x0: -X + 1, x1: X - 1, y0: 0.5, y1: 13, z0: -Z + 1, z1: Z - 1 }, 0xdfe8ff, 0.09, 0.5, 0.6);
+    for (const [ox, oy, tx] of [[-1.5, 0, 0.3], [0.2, 0, -0.2]]) L.ray(3 + ox * 3 + 2, H - 4, -Z + 0.6, 2.4, 13, 0xb8d0ff, 0.08, { tx, wb: 5 });
+    // ── blocks and the staircase ──
+    const BS = 1.1, blocks = [], lc = ['#d94f3d', '#3f7fd0', '#e9c23a', '#4aa35a', '#e57aa0', '#8a58c2', '#e88a3a', '#3aa5a5'];
+    for (let i = 0; i < 8; i++) {
+      const tex = L.tex('blk' + i, () => cTex(128, 128, (g) => { g.fillStyle = lc[i]; g.fillRect(0, 0, 128, 128); g.strokeStyle = 'rgba(255,255,255,.35)'; g.lineWidth = 8; g.strokeRect(4, 4, 120, 120); g.fillStyle = 'rgba(255,255,255,.92)'; g.font = '700 88px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('ABCDEFGH'[i], 64, 70); grunge(g, 128, 128, 0.05, 2); }, { repeat: false }));
+      const m = new Mesh(L.geo('blkG', () => new BoxGeometry(BS, BS, BS)), L.mat('blkM' + i, () => new MeshLambertMaterial({ map: tex }))); m.position.set(-9 + (i % 4) * 2.3, BS / 2, 4.6 + (i >> 2) * 2.6); m.rotation.y = r.range(-0.4, 0.4); L.add(m);
+      blocks.push(L.body(m, [BS / 2, BS / 2, BS / 2], { collider: true, hold: 1.9, label: 'Hold to pull', pickHalf: [0.75, 0.75, 0.75], range: 14, loud: 1.2, bounce: 0.12 }));
+    }
+    const SP = [[-0.55, 0.55, -1], [0.55, 0.55, -1], [0.55, 1.65, 1], [1.65, 0.55, -1], [1.65, 1.65, 3], [1.65, 2.75, 4]];
+    const slots = [], edgeG = L.geo('edgeG', () => new THREE.EdgesGeometry(new BoxGeometry(BS, BS, BS)));
+    SP.forEach(([x, y, below], i) => {
+      const line = new THREE.LineSegments(edgeG, new LineBasicMaterial({ color: 0xbfe0ff, transparent: true, opacity: 0.9, depthTest: false })); line.position.set(x, y, -7); line.renderOrder = 4; L.add(line);
+      const s = L.slot(new Vector3(x, y, -7), 1.5, (b, sl) => sl.below === null || (sl.below.body !== null), () => { line.visible = false; L.progress(); }, () => { line.visible = true; }); s.below = below >= 0 ? null : null; s.line = line; s.bi = below; slots.push(s);
+    });
+    slots.forEach((s, i) => { s.below = SP[i][2] >= 0 ? slots[SP[i][2]] : null; });
+    // ── fragments: 1 by the train, 2 on the pillow, 3 on the windowsill ──
+    const f1 = L.fragment(0, -0.7 * G, 1.9, 0.75 * G + 0.5), f2 = L.fragment(1, 0.9 * G, 0.58 * G + 1.1, -2.0 * G, { range: 3.2 }), f3 = L.fragment(2, 0.9 * G, 0.72 * G + 1.2, -2.35 * G, { range: 3.2 });
+    // ── exit: the bedroom door, ajar on a hallway light ──
+    L.glowCell(-X - 9, DZ - 5, -X - 0.05, DZ + 5, 0, 13, 'e', 0xfff4e0); gf.add(-X - 3, 4.5, DZ, 10, 0xfff0d8, 0.02, 0); L.box(-X - 10, -2, DZ - 5.6, -X, 14, DZ + 5.6, { noray: true });
+    L.exit({ x: -X, z: DZ, yaw: Math.PI / 2, w: 5, h: 10.5, s: G, color: 0x9a6a3e, frame: 0xd8c8a8, glow: 0xfff6e8 });
+    L.spawn = { x: 2, y: 0, z: 10.5, yaw: 0 }; L.bounds = { x0: -X + 0.6, x1: X - 0.6, z0: -Z + 0.6, z1: Z - 0.6 };
+    L.hint(() => {
+      if (!f1.got) return f1.g.position;
+      const open = slots.find((s) => !s.body && (s.below === null || s.below.body)); if (open) { const free = blocks.find((b) => !b.snapped); return free && !free.held ? free.pos : open.pos; }
+      if (!f2.got) return f2.g.position; if (!f3.got) return f3.g.position; return null;
+    });
+    L.audio({
+      noise: [{ type: 'white', filter: 'bandpass', freq: 4900, q: 7, gain: 0.006, lfo: { rate: 6.5, depth: 0.004 } }, { type: 'brown', filter: 'lowpass', freq: 170, gain: 0.08 }, { type: 'pink', filter: 'bandpass', freq: 600, q: 0.6, gain: 0.015, lfo: { rate: 0.05, depth: 0.01 } }],
+      drone: [{ f: 65.4, gain: 0.025, lp: 200, lfo: 0.03 }], events: [{ every: [1, 1], fn: (A) => A.tick() }, { every: [55, 110], fn: (A) => { A.voice('triangle', 220, A.ctx.currentTime, 0.3, 2.4, 0.03, A.busSfx); A.voice('triangle', 277, A.ctx.currentTime, 0.3, 2.4, 0.025, A.busSfx); } }],
+    }, { root: 64, scale: 'major', tempo: 36, timbre: 'box', seed: 61, density: 0.9, vol: 0.9, sparse: 0.2, motif: [4, 2, 0, 2, 4, 4, 4, null] });
+    L.onUpdate((dt, t) => {
+      for (const c of curtains) { const p = c.g.attributes.position, b = c.base; for (let i = 0; i < p.count; i++) { const y = b[i * 3 + 1], k = 1 - (y + 4.1) / 8.2; p.setX(i, b[i * 3] + Math.sin(t * 0.7 + y * 0.6 + c.ph) * 0.18 * (0.3 + k * 0.7)); p.setZ(i, b[i * 3 + 2] + Math.sin(t * 0.9 + y * 0.4 + c.ph) * 0.12 * (0.3 + k * 0.7)); } p.needsUpdate = true; }
+      for (const s of slots) { const avail = !s.body && (s.below === null || s.below.body); s.line.visible = avail; s.line.material.opacity = 0.55 + 0.35 * Math.sin(t * 3); }
+    });
+  },
+}]);
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════
+   LEVEL 7 — FLOODED SCHOOL.  Knee-deep water, drifting papers, chalkboards with fading handwriting.
+   The lantern reveals invisible chalk on the three boards: together they are the locker code (memory 2).
+   The lantern also finds the one desk that remembers (memory 3). Memory 1 rides the teacher's desk in room A.
+   ═════════════════════════════════════════════════════════════════════════════════════════════ */
+Levels.register([{
+  id: 6, name: 'Flooded School',
+  build(L) {
+    const cs = 2.5, H = 3.2, WL = 0.45;
+    L.env({ fog: [0x8a9ea4, 0.03], hemi: [0xc8dade, 0x566a72, 0.72], key: { color: 0xe4f0f0, i: 4.6, pos: [0, 2, 0], dist: 12, decay: 2, follow: [0, 0.9, 0] }, haze: [0xb0c8cc, 0.035] });
+    L.fragColor = 0xf4fff0;
+    const fb = L.builderWith('floor', L.lambert('floorM', L.tex('floorT', () => TEX.checker({ a: '#c8c9b0', b: '#8fa08a', n: 8, wear: 0.9, seed: 3 }))));
+    const wb = L.builderWith('wall', L.lambert('wallM', L.tex('wallT', () => TEX.plaster({ base: '#b8c4b0', seed: 5, cracks: 4 })))), cb = L.builderWith('ceil', L.lambert('ceilM', L.tex('ceilT', () => TEX.ceiling({ base: '#c8ccc0', seed: 4, n: 3 }))));
+    const B = L.b('flat'), GB = L.b('glowb'), gf = L.glow(90);
+    const MAP = [
+      '###############',
+      '#....#....#...#',
+      '#....#....#...#',
+      '#....#....#...#',
+      '#....#....#...#',
+      '##.####.####.##',
+      'X.............#',
+      'X.............#',
+      '###############',
+    ];
+    const G = L.grid(MAP, { cs, h: H, fb, fuv: 2.5, cb, cuv: 2.5, wb, wuv: 2.5 });
+    L.bounds = { x0: G.X(0) + 0.5, x1: G.X(14) - 0.3, z0: G.Z(1) + 0.3, z1: G.Z(8) - 0.3 }; L.spawn = { x: G.cx(13), y: 0, z: G.Z(7), yaw: Math.PI / 2 };
+    L.sky({ top: 0x6a7a80, mid: 0x9aabb0, bot: 0x4a5a60, cloud: 0.9, cloudCol: 0xa0b0b4, sun: 0x000000, cloudSpeed: 0.002 });
+    const water = L.water(G.X(0), G.Z(0), G.X(15), G.Z(9), WL, { shallow: 0x7aa89e, deep: 0x3a5a5a, sky: 0xd8e8e8, horizon: 0x8aa0a0, alpha: 0.55, skylight: 0.8, wave: 0.7, light: [0.1, 1, 0.1] });
+    // doorways (open archways) between rooms and hall
+    for (const gx of [2, 7, 12]) L.doorway(G.cx(gx), G.Z(5), 0, { cs, wallH: H, w: 1.3, h: 2.4, wb, wuv: 2.5 });
+    // ── classroom furniture ──
+    const rooms = [{ x0: 1, x1: 4 }, { x0: 6, x1: 9 }, { x0: 11, x1: 13 }], boards = [], r = makeRng(14);
+    rooms.forEach((rm, ri) => {
+      const cxr = (G.X(rm.x0) + G.X(rm.x1 + 1)) / 2, wN = G.Z(1);
+      // chalkboard on the north wall
+      const btex = L.tex('board' + ri, () => cTex(1024, 320, (g, w, h) => { g.fillStyle = '#26382e'; g.fillRect(0, 0, w, h); grunge(g, w, h, 0.05, 1); g.strokeStyle = '#6a4a2a'; g.lineWidth = 16; g.strokeRect(8, 8, w - 16, h - 16); g.font = 'italic 46px "Comic Sans MS", Georgia, serif'; g.fillStyle = '#e8efe8'; const lines = ['Good morning, class.', 'Today we remember:', ['Emma  ·  Jonah  ·  Priya', 'Tomas  ·  Wren  ·  Ollie', 'Mina  ·  Sam  ·  Asha'][ri], 'Please do not forget us.']; lines.forEach((t, i) => { g.globalAlpha = 0.9 - i * 0.2; g.fillText(t, 50, 80 + i * 62); }); g.globalAlpha = 1; blobs(g, w, h, 6, 9 + ri, '200,220,200', 40, 120, 0.05, 0.12); }, { repeat: false, aniso: 4 }));
+      const bw = rm.x1 - rm.x0 >= 4 ? 5.4 : 4.2, bm = new Mesh(L.geo('boardG' + bw, () => new PlaneGeometry(bw, 1.7)), new MeshBasicMaterial({ map: btex })); bm.position.set(cxr, 1.75, wN + 0.03); L.add(bm); boards.push({ x: cxr, bw });
+      B.box(cxr, 1.75, wN + 0.02, bw + 0.2, 1.9, 0.04, 0x6a4a2a, 1); B.box(cxr, 0.85, wN + 0.12, bw, 0.05, 0.16, 0x6a4a2a, 1);
+      // teacher desk + student desks
+      Props.table(B, cxr, wN + 1.2, 1.6, 0.7, 0.78, 0, { top: 0x7a5a3a, leg: 0x4a3a28 }); Props.chair(B, cxr, wN + 0.55, 0, { seat: 0x4a5a48 });
+      const dz0 = wN + 3.2, per = Math.floor((G.X(rm.x1 + 1) - G.X(rm.x0) - 2) / 1.6); for (let i = 0; i < 4; i++) for (let j = 0; j < per; j++) { const dx = G.X(rm.x0) + 1.2 + j * 1.6, dz = dz0 + i * 1.5 - 0.6; if (dz > G.Z(5) - 0.6) continue; if (ri === 2 && i === 1 && j === 1) continue; if (r() < 0.12) continue; Props.table(B, dx, dz, 0.75, 0.5, 0.7, r.range(-0.08, 0.08), { top: 0xc9a878, leg: 0x6a6a6a }); Props.chair(B, dx, dz + 0.5, Math.PI + r.range(-0.15, 0.15), { seat: 0x6a7a88, wood: 0x6a6a6a, s: 0.85 }); }
+      // window band, light shafts
+      GB.box(cxr, 2.88, wN + 0.02, bw + 2.4, 0.44, 0.02, 0xdcecf0); L.ray(cxr, 2.9, wN + 0.3, 2.8, 5, 0xe0f0ff, 0.09, { tz: 0.3 }); gf.add(cxr, 2.85, wN + 0.6, 4.5, 0xdcecff, 0.02, 0);
+      B.box(cxr - bw / 2 - 0.7, 2.3, wN + 0.05, 0.4, 0.4, 0.06, 0x3a3a3a, 1); Props.clock(B, GB, cxr + bw / 2 + 0.7, 2.3, wN + 0.06, 0, 0.22, 8, 15);
+    });
+    // ── lantern-only chalk clues → locker code 4-1-7 ──
+    const CODE = [4, 1, 7], words = ['first, four', 'then, one', 'last, seven'], found = [false, false, false];
+    boards.forEach((bd, i) => {
+      const t = textTex(words[i], 768, 160, { fg: '#ffffff', size: 92, italic: true, glow: '#fff2b0', family: '"Comic Sans MS", Georgia, serif' });
+      L.ghost(t, bd.x + bd.bw * 0.16, 1.32, G.Z(1) + 0.045, 2.6, 0.55, { color: 0xfff2b8, range: 8, onFull: () => { if (!found[i]) { found[i] = true; L.progress(); AudioSys.chime(660 + i * 110, 0.14); toastHook(`Chalk, under the lantern: "${words[i]}".`, 4); } } });
+    });
+    // ── the locker wall & the keypad ──
+    const zL = G.Z(8) - 0.02, lx = G.cx(8) + 0.4;
+    for (let i = 0; i < 34; i++) { const x = G.X(1) + 1.2 + i * 1.02; if (Math.abs(x - lx) < 0.6) continue; if (x > G.X(14) - 0.6) break; B.box(x, 1.0, zL - 0.24, 0.9, 2.0, 0.46, i % 3 ? 0x5f8a86 : 0x557a7c, 1); B.box(x, 1.55, zL - 0.48, 0.5, 0.18, 0.02, 0x2a3a3c, 1); B.box(x + 0.32, 1.05, zL - 0.5, 0.05, 0.16, 0.05, 0xb0b0a8, 1); }
+    for (const dx of [-0.26, 0.26]) B.box(lx + dx, 1.0, zL - 0.24, 0.03, 2.0, 0.46, 0x9a8a44, 1); B.box(lx, 1.0, zL - 0.02, 0.56, 2.0, 0.03, 0x9a8a44, 1); B.box(lx, 2.0, zL - 0.24, 0.56, 0.03, 0.46, 0x9a8a44, 1); B.box(lx, 0.02, zL - 0.24, 0.56, 0.03, 0.46, 0x9a8a44, 1);
+    const ldoor = L.door(lx, 0, zL - 0.47, Math.PI, { w: 0.5, h: 1.95, color: 0xb4a24e, frame: 0x6a5a2a, glowBehind: false, flip: true, noCollider: true });
+    L.sign('MY LOCKER', lx, 2.3, zL - 0.05, 0.9, 0.22, { fg: '#e8e0b0', bg: 'rgba(30,30,20,.7)', size: 44, cw: 384, yaw: Math.PI });
+    const f2 = L.fragment(1, lx, 1.1, zL - 0.22, { hidden: true, range: 2.4 });
+    let code = '', unlocked = false;
+    const pad = L.panel(512, 640, 0.5, 0.625, { order: 2 });
+    const layoutPad = () => {
+      pad.clear();
+      pad.text(256, 30, code.padEnd(3, '•').split('').join(' '), { size: 84, align: 'center', color: unlocked ? '#9fe89f' : '#f0e8d0', bold: true });
+      const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '⌫', '0', 'OK'];
+      keys.forEach((k, i) => { const x = 40 + (i % 3) * 148, y = 150 + Math.floor(i / 3) * 118; pad.button(x, y, 136, 106, k, () => press(k), { size: 52, active: false, enabled: !unlocked }); });
+      pad.dirty = true;
+    };
+    function press(k) {
+      if (unlocked) return;
+      if (k === '⌫') code = code.slice(0, -1); else if (k === 'OK') { if (code === CODE.join('')) { unlocked = true; ldoor.open(true); f2.show(true); L.progress(); toastHook('Click. The locker remembers.', 3.5); AudioSys.chord({ root: 60, scale: 'major' }, [0, 2, 4, 7], 'glass', 0.4); } else { AudioSys.buzz(); code = ''; toastHook('Nothing. Look for what the boards forgot.', 3.5); } } else if (code.length < 3) code += k;
+      layoutPad();
+    }
+    layoutPad(); pad.placeAt(lx + 0.95, 1.25, zL - 0.55, Math.PI);
+    // ── memory 1 rides the teacher's desk in room A; memory 3 sleeps inside one desk in room C ──
+    const rA = rooms[0], cxA = (G.X(rA.x0) + G.X(rA.x1 + 1)) / 2, f1 = L.fragment(0, cxA, 1.35, G.Z(1) + 1.2);
+    const rC = rooms[2], deskX = G.X(rC.x0) + 1.2 + 1 * 1.6, deskZ = G.Z(1) + 3.2 + 1 * 1.5 - 0.6;
+    const lidMat = L.mat('lidM', () => new MeshLambertMaterial({ color: 0xc9a878 })), lidPivot = new Group(); lidPivot.position.set(deskX - 0.375, 0.7, deskZ - 0.25); L.add(lidPivot);
+    const lid = new Mesh(L.geo('lidG2', () => new BoxGeometry(0.75, 0.04, 0.5).translate(0.375, 0, 0.25)), lidMat); lidPivot.add(lid); B.box(deskX, 0.35, deskZ, 0.7, 0.62, 0.46, 0x9a8a68, 1); B.box(deskX, 0.62, deskZ, 0.62, 0.04, 0.38, 0x1a1a18, 1);
+    const f3 = L.fragment(2, deskX, 0.98, deskZ, { hidden: true, range: 2.6 });
+    let deskOpen = false, deskK = 0;
+    const dRev = L.ghost(L.tex('gcircle', () => TEX.glyph('circle', '#fff2b0')), deskX, 0.73, deskZ, 0.62, 0.62, { rx: -Math.PI / 2, color: 0xfff2b8, range: 8, max: 0.95 });
+    L.interact({ obj: lid, half: new Vector3(0.45, 0.2, 0.32), off: new Vector3(0.375, 0, 0.25), label: 'Lift the lid', enabled: () => !deskOpen && dRev.r > 0.25, onSelect: () => { deskOpen = true; f3.show(true); AudioSys.door(true); L.progress(); } });
+    // ── the secret: a paper boat with a letter, drifting in the hall (visible only under the lantern) ──
+    const boat = new Mesh(L.geo('boatG', () => new ConeGeometry(0.16, 0.24, 4).rotateZ(Math.PI / 2)), new MeshLambertMaterial({ color: 0xf4f0e2 })); boat.position.set(G.cx(4), WL + 0.06, G.Z(7) - 0.4); L.add(boat);
+    const bRev = L.mark(0, 0, 0, { glyph: 'heart', size: 0.7, rx: -Math.PI / 2, c: '#ffd0e0', max: 1, range: 7 });
+    L.interact({ obj: boat, r: 0.5, range: 6, label: '✦', enabled: () => bRev.r > 0.25, onSelect: () => L.foundSecret(boat.position) });
+    // ── papers ──
+    const NP = 70, papers = new InstancedMesh(L.geo('papG', () => new PlaneGeometry(0.3, 0.22)), L.mat('papM', () => new MeshLambertMaterial({ color: 0xf2f0e4, side: DoubleSide })), NP), pd = new Object3D(), pp = [];
+    for (let i = 0; i < NP; i++) pp.push({ x: r.range(G.X(1), G.X(14)), z: r.range(G.Z(1) + 0.5, G.Z(8) - 0.5), a: r() * TAU, vx: 0, vz: 0, ph: r() * TAU });
+    papers.frustumCulled = false; L.add(papers);
+    // ── decor: bulletin board, fountain, trophies ──
+    const DRW = L.builderWith('draw', L.mat('drawM', () => new MeshBasicMaterial({ map: L.tex('drawings', () => TEX.drawings({ seed: 61 })), vertexColors: true })), false, false);
+    for (let i = 0; i < 8; i++) { const c = i % 4, rw = (i >> 2) % 4, u0 = c / 4, v1 = 1 - rw / 4, x = G.X(3) + 1 + i * 0.8, z = G.Z(6) + 0.03; DRW.quad([x, 1.4, z, x + 0.6, 1.4, z, x + 0.6, 2.0, z, x, 2.0, z], [0, 0, 1], [u0, v1 - 0.25, u0 + 0.25, v1 - 0.25, u0 + 0.25, v1, u0, v1], 0xffffff, 1); }
+    B.box(G.X(3) + 3.2, 1.7, G.Z(6) + 0.02, 6.9, 1.0, 0.04, 0x8a6a3a, 1);
+    for (let i = 0; i < 5; i++) { B.box(G.X(11) + i * 0.4, 1.2, G.Z(6) + 0.3, 0.2, 0.3, 0.2, 0xc9a24a, 1); }
+    B.box(G.X(11) + 0.8, 0.6, G.Z(6) + 0.3, 2.2, 1.2, 0.5, 0x5a4028, 1);
+    Props.plant(B, G.cx(13) - 0.2, G.Z(8) - 0.6, 1.2, { pot: 0x5a6a6a, leaf: 0x5a7a5a });
+    // dead ceiling lights
+    for (let gx = 2; gx < 14; gx += 2) for (const gz of [6, 7]) { const x = G.cx(gx), z = gz === 6 ? G.Z(7) - 0.9 : G.Z(7) + 0.9, dead = (gx + gz) % 3 === 0; GB.box(x, H - 0.03, z, 1.2, 0.05, 0.3, dead ? 0x555a56 : 0xf2f4e0); if (!dead) gf.add(x, H - 0.25, z, 1.9, 0xe8f0e0, 0.05, 0); }
+    // ── exit at the west end of the hall ──
+    const ex = G.X(1), ez = G.Z(7);
+    L.doorway(ex, ez, Math.PI / 2, { cs: 5, wallH: H, w: 1.3, h: 2.5, wb, wuv: 2.5 }); L.glowCell(G.X(0) + 0.02, G.Z(6) + 0.02, ex - 0.02, G.Z(8) - 0.02, 0, H, 'e', 0xfff6e6); gf.add(G.X(0) + 1.2, 1.6, ez, 4, 0xfff0d8, 0.02, 0);
+    L.exit({ x: ex, z: ez, yaw: Math.PI / 2, w: 1.3, h: 2.5, glow: 0xfff6e8 });
+    L.sign('EXIT', ex + 0.05, 2.95, ez, 0.8, 0.26, { fg: '#ff5a4a', bg: '#1a1010', size: 48, cw: 256, yaw: Math.PI / 2, bold: true });
+    L.dust(120, { x0: G.X(1), x1: G.X(14), y0: 0.5, y1: 3, z0: G.Z(1), z1: G.Z(8) }, 0xe8f4f0, 0.03, 0.4, 0.15);
+    L.speedAt = () => 0.72;
+    L.hint(() => { if (!f1.got) return f1.g.position; if (!unlocked) { const n = found.findIndex((v) => !v); return n >= 0 ? new Vector3(boards[n].x, 1.5, G.Z(1) + 0.6) : new Vector3(lx, 1.2, zL - 0.7); } if (!f2.got) return f2.g.position; if (!f3.got) return deskOpen ? f3.g.position : new Vector3(deskX, 0.9, deskZ); return null; });
+    L.audio({
+      noise: [{ type: 'pink', filter: 'lowpass', freq: 3200, gain: 0.05 }, { type: 'white', filter: 'highpass', freq: 4500, gain: 0.014, lfo: { rate: 0.2, depth: 0.008 } }, { type: 'brown', filter: 'lowpass', freq: 150, gain: 0.07 }],
+      hum: { f0: 100, harm: [1, 2, 3], gain: 0.008, lp: 900, buzz: 0.35 }, drone: [{ f: 55, gain: 0.03, lp: 200, lfo: 0.04 }],
+      events: [{ every: [1.5, 4], fn: (A) => { const p = A.panner({ x: G.X(1) + Math.random() * 30, y: 2, z: G.Z(1) + Math.random() * 20 }, 3, 0.7); p.connect(A.busSfx); A.drip(p, 0.12); } }, { every: [60, 120], fn: (A) => { A.chime(392, 0.06); setTimeout(() => A.chime(330, 0.05), 900); } }],
+    }, { root: 57, scale: 'dorian', tempo: 44, timbre: 'piano', seed: 71, density: 0.75, vol: 0.85, sparse: 0.3, motif: [4, 2, 0, null, 2, 4, 5, null] });
+    let lastRip = new Vector3(1e9, 0, 1e9), walkT = 0;
+    L.onUpdate((dt, t) => {
+      deskK = damp(deskK, deskOpen ? 1 : 0, 5, dt); lidPivot.rotation.z = deskK * 1.6;
+      const hx = Head.world.x, hz = Head.world.z;
+      for (let i = 0; i < NP; i++) {
+        const p = pp[i], dx = p.x - hx, dz = p.z - hz, d2 = dx * dx + dz * dz;
+        if (d2 < 1.6) { const d = Math.sqrt(d2) || 0.1; p.vx += (dx / d) * dt * 1.6; p.vz += (dz / d) * dt * 1.6; }
+        p.vx = damp(p.vx, Math.sin(t * 0.05 + i) * 0.03, 1.2, dt); p.vz = damp(p.vz, Math.cos(t * 0.04 + i * 1.3) * 0.03 + 0.02, 1.2, dt); p.x = clamp(p.x + p.vx * dt, G.X(1) + 0.3, G.X(14) - 0.3); p.z = clamp(p.z + p.vz * dt, G.Z(1) + 0.3, G.Z(8) - 0.3);
+        pd.position.set(p.x, WL + 0.012 + Math.sin(t * 1.2 + p.ph) * 0.006, p.z); pd.rotation.set(-Math.PI / 2, 0, p.a + Math.sin(t * 0.3 + p.ph) * 0.3); pd.updateMatrix(); papers.setMatrixAt(i, pd.matrix);
+      }
+      papers.instanceMatrix.needsUpdate = true;
+      const bt = t * 0.06; boat.position.set(G.cx(4) + Math.sin(bt) * 9, WL + 0.05 + Math.sin(t * 1.4) * 0.01, G.Z(7) + Math.cos(bt * 1.7) * 0.7); boat.rotation.y = Math.cos(bt) * 0.6; boat.rotation.z = Math.sin(t * 1.1) * 0.06; bRev.mesh.position.set(boat.position.x, WL + 0.4, boat.position.z); bRev.pos.copy(bRev.mesh.position);
+      const d = Math.hypot(hx - lastRip.x, hz - lastRip.z); walkT += dt; if (d > 0.7) { lastRip.set(hx, 0, hz); L.ripple(hx, hz, 0.8); AudioSys.splash(0.06); }
+    });
+  },
+}]);
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════
+   LEVEL 8 — PLAYGROUND AT TWILIGHT.  Swings that creak on their own, a slide, a merry-go-round, distant laughter.
+   A little music box in the middle plays a phrase; repeat it on the equipment (swing, carousel, seesaw, bells).
+   Three phrases rebuild the melody — and each one leaves a memory behind.
+   ═════════════════════════════════════════════════════════════════════════════════════════════ */
+Levels.register([{
+  id: 7, name: 'Playground at Twilight',
+  build(L) {
+    const FX = 24, FZ = 24;
+    L.env({ fog: [0x3d2b55, 0.013], hemi: [0x9088c8, 0x3a2a48, 0.58], key: { color: 0xff9a84, i: 0.62, pos: [40, 12, -250], dist: 0, decay: 0 }, fill: { color: 0xffc890, i: 9, pos: [0, 3.6, -3], dist: 16, decay: 2 }, haze: [0xd070a0, 0.03] });
+    L.fragColor = 0xfff0d8;
+    L.sky({ top: 0x141c4a, mid: 0xe06c92, bot: 0x2a1a3a, sun: 0xff8a6a, sunDir: [0.25, -0.03, -0.96], sunSize: 0.8, cloud: 0.55, cloudCol: 0xb890c8, cloudSpeed: 0.0012, stars: 0.75, seed: 9 });
+    const B = L.b('flat'), GB = L.b('glowb'), gf = L.glow(170);
+    const gb = L.builderWith('ground', L.lambert('groundM', L.tex('groundT', () => TEX.grass({ base: '#4c6a48', seed: 12 }))));
+    gb.flat(-90, -90, 90, 90, 0, 0xc8c0e0, 6, true);
+    const mat2 = L.builderWith('mat', L.lambert('matM', L.tex('matT', () => TEX.asphalt({ base: '#5a4a5e', seed: 4 })))); mat2.flat(-12, -8, -4, 3, 0.01, 0xffffff, 3, true); mat2.flat(4, -11, 12, -2, 0.01, 0xffffff, 3, true); mat2.flat(-11, 4, -3, 12, 0.01, 0xffffff, 3, true); mat2.flat(5, 3, 13, 11, 0.01, 0xffffff, 3, true);
+    // ── fence, trees, fairy lights ──
+    const r = makeRng(18);
+    const picket = (x, z, alongX) => B.box(x, 0.55, z, alongX ? 0.09 : 0.05, 1.1, alongX ? 0.05 : 0.09, 0xe8dcc8, 1);
+    for (let x = -FX; x <= FX; x += 0.42) { if (Math.abs(x) > 1.5) picket(x, -FZ, true); picket(x, FZ, true); }
+    for (let z = -FZ; z <= FZ; z += 0.42) { picket(-FX, z, false); picket(FX, z, false); }
+    for (const [x, z, w, d] of [[0, -FZ, 2 * FX, 0.06], [0, FZ, 2 * FX, 0.06], [-FX, 0, 0.06, 2 * FZ], [FX, 0, 0.06, 2 * FZ]]) { B.box(x, 0.85, z, w, 0.07, d, 0xd8ccb8, 1); B.box(x, 0.3, z, w, 0.07, d, 0xd8ccb8, 1); }
+    L.box(-FX - 2, 0, -FZ - 2, -1.5, 3, -FZ); L.box(1.5, 0, -FZ - 2, FX + 2, 3, -FZ); L.box(-FX - 2, 0, FZ, FX + 2, 3, FZ + 2); L.box(-FX - 2, 0, -FZ, -FX, 3, FZ); L.box(FX, 0, -FZ, FX + 2, 3, FZ);
+    for (let i = 0; i < 22; i++) { const a = (i / 22) * TAU + r.range(-0.1, 0.1), rr = 33 + r.range(0, 6), x = Math.sin(a) * rr * 1.25, z = -Math.cos(a) * rr * 1.25, th = r.range(6, 9); B.cyl(x, th / 2, z, 0.3, 0.4, th, 6, 0x4a3a34); for (let s = 0; s < 4; s++) B.sphere(x + r.range(-1, 1), th + 0.8 + s * 0.9, z + r.range(-1, 1), 2.4 - s * 0.4, r.pick([0x3f5a48, 0x486a50, 0x35503f]), 1, 0.8, 1, 8); }
+    for (let i = 0; i < 70; i++) { const t = i / 70, x = -FX + t * 2 * FX, y = 1.9 + Math.sin(t * 60) * 0.12; gf.add(x, y, FZ - 0.1, 0.32, r() < 0.5 ? 0xffd28a : 0xffb0c8, 0.2, 0); if (Math.abs(x) > 2) gf.add(x, y, -FZ + 0.1, 0.32, r() < 0.5 ? 0xffd28a : 0xa8d0ff, 0.2, 0); }
+    // ── lamp post ──
+    B.cyl(0, 1.9, -3, 0.09, 0.12, 3.8, 8, 0x2a2e32); GB.sphere(0, 3.85, -3, 0.3, 0xffe0a8, 1, 1.1, 1, 8); gf.add(0, 3.85, -3, 3.2, 0xffcc88, 0.05, 0);
+    // ── the music box in the middle ──
+    B.cyl(0, 0.3, 0, 0.55, 0.65, 0.6, 12, 0x6a5a48); B.cyl(0, 0.72, 0, 0.5, 0.5, 0.25, 12, 0x8a4a5a); B.cone(0, 1.05, 0, 0.6, 0.5, 12, 0xd8b060); L.collider(0, 0, 0.7, 0.7, 0, 0, 1.0, {});
+    // ── equipment pieces ──
+    const CI = [0xff6a6a, 0xffd25a, 0x6affc0, 0x7ab0ff];
+    const PIECES = [{ pos: new Vector3(-9, 1.7, -4) }, { pos: new Vector3(8, 1.2, -6) }, { pos: new Vector3(-7, 1.2, 8) }, { pos: new Vector3(9, 1.5, 7) }];
+    PIECES.forEach((p, i) => { p.col = CI[i]; p.glow = 0; p.halo = new Sprite(new SpriteMaterial({ map: L.tex('glow', () => TEX.glow()), color: CI[i], transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0 })); p.halo.scale.setScalar(2.2); p.halo.position.copy(p.pos); L.add(p.halo); p.pan = AudioSys.ok ? AudioSys.panner(p.pos, 3, 0.9) : null; if (p.pan) p.pan.connect(AudioSys.busSfx); });
+    // swing set
+    B.box(-9, 2.7, -4, 0.14, 0.14, 5.6, 0x8a3a3a, 1); for (const z of [-6.8, -1.2]) for (const sg of [-1, 1]) { B.push(-9 + sg * 0.55, 1.3, z, 0, 0, -sg * 0.22); B.box(0, 0, 0, 0.12, 2.8, 0.12, 0x8a3a3a, 1); B.pop(); } L.box(-10, 0, -7, -8, 2.9, -6.6, { noray: true }); L.box(-10, 0, -1.4, -8, 2.9, -1, { noray: true });
+    const swB = new MeshBuilder(false, true); swB.box(-0.28, -0.95, 0, 0.025, 1.9, 0.025, 0x555a60, 1); swB.box(0.28, -0.95, 0, 0.025, 1.9, 0.025, 0x555a60, 1); swB.box(0, -1.9, 0, 0.65, 0.07, 0.3, 0x3a5a9a, 1);
+    const swGeo = swB.build(new MeshLambertMaterial({ vertexColors: true })).geometry, swMat = L.mat('swM', () => new MeshLambertMaterial({ vertexColors: true })), swings = [];
+    for (const z of [-5.6, -4, -2.4]) { const g = new Group(); g.position.set(-9, 2.7, z); const m = new Mesh(swGeo, swMat); g.add(m); L.add(g); swings.push({ g, th: z === -4 ? 0 : (z < -4 ? 0.3 : -0.25), om: 0, k: z }); }
+    // carousel
+    const cB = new MeshBuilder(false, true); for (let i = 0; i < 6; i++) cB.geo(new CylinderGeometry(2.0, 2.0, 0.14, 8, 1, false, (i / 6) * TAU, TAU / 6), i % 2 ? 0xe8b040 : 0xd85a4a, 0, 0.5, 0);
+    cB.cyl(0, 1.1, 0, 0.1, 0.1, 1.2, 6, 0x6a6a72); for (let i = 0; i < 4; i++) { const a = (i / 4) * TAU; cB.torus(Math.cos(a) * 1.3, 1.0, Math.sin(a) * 1.3, 0.4, 0.035, 0xd8d8e0, 0, -a + Math.PI / 2, 0, 10); }
+    const carousel = new Mesh(cB.build(new MeshLambertMaterial({ vertexColors: true })).geometry, L.mat('caM', () => new MeshLambertMaterial({ vertexColors: true }))); carousel.position.set(8, 0, -6); L.add(carousel); L.collider(8, -6, 2.0, 2.0, 0, 0, 0.7);
+    B.cyl(8, 0.25, -6, 0.5, 0.6, 0.5, 8, 0x555a60); let cSpin = 0;
+    // seesaw
+    const sB = new MeshBuilder(false, true); sB.box(0, 0.5, 0, 4.2, 0.12, 0.34, 0x3f8a6a, 1); sB.box(-1.7, 0.7, 0, 0.06, 0.4, 0.06, 0x555a60, 1); sB.box(1.7, 0.7, 0, 0.06, 0.4, 0.06, 0x555a60, 1); sB.box(-1.7, 0.9, 0, 0.5, 0.05, 0.06, 0x555a60, 1); sB.box(1.7, 0.9, 0, 0.5, 0.05, 0.06, 0x555a60, 1);
+    const seesaw = new Mesh(sB.build(new MeshLambertMaterial({ vertexColors: true })).geometry, L.mat('seM', () => new MeshLambertMaterial({ vertexColors: true }))); seesaw.position.set(-7, 0.6, 8); seesaw.rotation.y = 0.4; L.add(seesaw); B.push(-7, 0, 8, 0.4); B.box(0, 0.3, 0, 0.5, 0.6, 0.3, 0x4a4a52, 1); B.pop(); L.collider(-8.2, 7.2, 1.2, 0.8, 0.4, 0, 0.6, {}); let ssA = 0, ssV = 0;
+    // bells
+    B.box(9, 2.05, 7, 0.1, 0.1, 3.0, 0x6a5a48, 1); for (const z of [5.5, 8.5]) B.box(9, 1.0, z, 0.12, 2.1, 0.12, 0x6a5a48, 1); L.box(8.5, 0, 5.2, 9.5, 2.2, 5.8, { noray: true }); L.box(8.5, 0, 8.2, 9.5, 2.2, 8.8, { noray: true });
+    const bells = [], bB = new MeshBuilder(false, true); bB.cone(0, -0.3, 0, 0.26, 0.5, 10, 0xd8b048); bB.sphere(0, -0.56, 0, 0.06, 0x8a6a2a); bB.cyl(0, -0.02, 0, 0.02, 0.02, 0.05, 4, 0x555555); const bGeo = bB.build(new MeshLambertMaterial({ vertexColors: true })).geometry, bMat = L.mat('beM', () => new MeshLambertMaterial({ vertexColors: true }));
+    for (const z of [6.1, 7.0, 7.9]) { const g = new Group(); g.position.set(9, 2.0, z); g.add(new Mesh(bGeo, bMat)); L.add(g); bells.push({ g, a: 0, v: 0 }); }
+    // slide and climbing frame (decor)
+    B.box(0, 1.5, -15, 1.6, 0.12, 1.6, 0x4a7ab0, 1); for (const sx of [-0.7, 0.7]) for (const sz of [-0.7, 0.7]) B.box(sx, 0.75, -15 + sz, 0.1, 1.5, 0.1, 0x4a4a52, 1);
+    B.push(0, 0.8, -12.6, 0, -0.62, 0); B.box(0, 0, 0, 0.9, 0.06, 3.6, 0xd8d8e0, 1); B.box(-0.47, 0.1, 0, 0.05, 0.2, 3.6, 0xd85a4a, 1); B.box(0.47, 0.1, 0, 0.05, 0.2, 3.6, 0xd85a4a, 1); B.pop();
+    for (let i = 0; i < 6; i++) B.box(0, 0.25 + i * 0.25, -15.9, 0.6, 0.04, 0.05, 0x4a4a52, 1); L.box(-1, 0, -16, 1, 1.6, -14, {}); L.box(-0.6, 0, -13.9, 0.6, 0.9, -11, { noray: true });
+    // monkey bars, sandbox, benches, hopscotch
+    B.box(12, 2.2, 8, 0.1, 0.1, 5, 0x6a6a72, 1); for (const z of [5.5, 10.5]) B.box(12, 1.1, z, 0.12, 2.2, 0.12, 0x6a6a72, 1); L.box(11.5, 0, 5.2, 12.5, 2.3, 5.8, { noray: true }); L.box(11.5, 0, 10.2, 12.5, 2.3, 10.8, { noray: true });
+    B.box(-14, 0.18, 4, 4, 0.36, 4, 0x8a6a48, 1); B.box(-14, 0.34, 4, 3.6, 0.04, 3.6, 0xc8a878, 1); L.box(-16, 0, 2, -12, 0.4, 6, {});
+    Props.bench(B, 0, 11, Math.PI, 1.8, { wood: 0x4a3a34, cushion: 0x5a4a5a }); Props.bench(B, -3, -18, 0, 1.8, { wood: 0x4a3a34, cushion: 0x5a4a5a });
+    for (let i = 0; i < 8; i++) { const x = -3 + (i % 2) * (i > 5 ? 0 : 0) + ((i === 3 || i === 4) ? (i === 3 ? -0.4 : 0.4) : 0), z = 14 + i * 0.7; B.box(x, 0.008, z, 0.6, 0.006, 0.6, 0xd8d4f0, 1); }
+    L.secret({ x: -3, y: 0.03, z: 19.6, glyph: 'star', rx: -Math.PI / 2, size: 0.9, r: 0.55, c: '#ffe0f0', range: 5 });
+    // ── fragments (each appears when its phrase is played back) ──
+    const frags = [L.fragment(0, 0, 1.55, -10.4, { hidden: true }), L.fragment(1, 8, 1.9, -6, { hidden: true }), L.fragment(2, 0, 2.4, 0, { hidden: true })];
+    // ── the game: listen, then repeat ──
+    const PHRASES = [[0, 1, 2], [2, 0, 3, 1], [1, 3, 0, 2, 1]]; let phrase = 0, k = 0, demo = null, waitT = 2.5, idleT = 0, miss = 0;
+    const mid = (i) => degToMidi(L.theme, [0, 1, 2, 3][i] + 2);
+    function ping(i, soft) {
+      const p = PIECES[i]; p.glow = 1; if (AudioSys.ok) AudioSys.note(mid(i), AudioSys.ctx.currentTime, 1.2, soft ? 0.5 : 0.7, 'box', AudioSys.busSfx, p.pan);
+      if (i === 0) { const s = swings[1]; s.om += soft ? 0.9 : 1.6; } else if (i === 1) cSpin = Math.min(4, cSpin + 1.6); else if (i === 2) ssV += soft ? 1.2 : 2.2; else for (const b of bells) b.v += 1.2 + Math.random() * 0.8;
+      if (!soft) Input.haptic(0.5, 80);
+    }
+    function startDemo(delay = 1.0) { demo = { i: 0, t: delay }; k = 0; }
+    function press(i) {
+      if (phrase >= 3) { ping(i, false); return; }
+      L.progress(); idleT = 0; demo = null; waitT = 1e9; ping(i, false);
+      if (i === PHRASES[phrase][k]) { k++; if (k >= PHRASES[phrase].length) solved(); }
+      else { k = i === PHRASES[phrase][0] ? 1 : 0; miss = 1; if (AudioSys.ok) AudioSys.voice('sine', 180, AudioSys.ctx.currentTime + 0.05, 0.01, 0.35, 0.06, AudioSys.busSfx); waitT = 3.2; }
+    }
+    function solved() {
+      const f = frags[phrase]; phrase++; k = 0; f.show(true); L.burst(f.g.position, 0xfff0d8, 26, 1.6); AudioSys.chord(L.theme, [0, 2, 4, 6, 8], 'glass', 0.45, 0.08); toastHook(phrase < 3 ? 'The melody remembers itself.' : 'The whole tune, again.', 4); if (phrase < 3) waitT = 4.5; else waitT = 1e9;
+    }
+    PIECES.forEach((p, i) => {
+      const targets = [swings[1].g, carousel, seesaw, bells[1].g], labels = ['Push the swing', 'Spin the carousel', 'Press the seesaw', 'Ring the bells'];
+      L.interact({ obj: targets[i], off: [new Vector3(0, -1.5, 0), new Vector3(0, 1, 0), new Vector3(0, 0.3, 0), new Vector3(0, -0.4, 0)][i], r: [1.3, 2.3, 2.3, 1.5][i], range: 10, label: labels[i], onSelect: () => press(i), onHold: i === 1 ? (it, dt) => { cSpin = Math.min(5, cSpin + dt * 1.3); } : null });
+    });
+    const boxIt = L.interact({ pos: new Vector3(0, 1.0, 0), r: 1.0, range: 8, label: 'Listen again', onSelect: () => { if (phrase < 3) startDemo(0.4); else { ping(0, true); setTimeout(() => ping(2, true), 300); setTimeout(() => ping(1, true), 600); } } });
+    // ── exit gate ──
+    L.exit({ x: 0, y: 0, z: -FZ, yaw: 0, w: 2.0, h: 2.6, color: 0xd8ccb8, frame: 0xc8bca8, glow: 0xfff6e0 }); B.box(-1.6, 0.8, -FZ, 0.25, 1.6, 0.25, 0xc8bca8, 1); B.box(1.6, 0.8, -FZ, 0.25, 1.6, 0.25, 0xc8bca8, 1); L.sign('PLEASE COME AGAIN', 0, 3.0, -FZ + 0.1, 3.2, 0.4, { fg: '#ffe6c8', bg: 'rgba(40,24,40,.8)', size: 46, cw: 768, yaw: 0 });
+    L.dust(200, { x0: -22, x1: 22, y0: 0.3, y1: 6, z0: -22, z1: 22 }, 0xffd8c8, 0.05, 0.5, 0.5);
+    L.spawn = { x: 0, y: 0, z: 19, yaw: 0 }; L.bounds = { x0: -FX + 0.6, x1: FX - 0.6, z0: -FZ + 0.6, z1: FZ - 0.6 };
+    L.hint(() => (phrase < 3 ? PIECES[PHRASES[phrase][k]].pos : (frags.find((f) => f.visible && !f.got) || { g: { position: new Vector3(0, 1, -FZ) } }).g.position));
+    L.audio({
+      noise: [{ type: 'pink', filter: 'lowpass', freq: 500, gain: 0.05, lfo: { rate: 0.07, depth: 0.03 } }, { type: 'white', filter: 'bandpass', freq: 5200, q: 6, gain: 0.006, lfo: { rate: 6, depth: 0.004 } }, { type: 'brown', filter: 'lowpass', freq: 160, gain: 0.06 }],
+      drone: [{ f: 73.4, gain: 0.02, lp: 220, lfo: 0.03 }],
+      events: [
+        { every: [3, 6], fn: (A) => { const s = swings[(Math.random() * 3) | 0]; A.noiseBurst(A.ctx.currentTime, 0.4, 'bandpass', 520, 380, 0.035, A.busSfx, (() => { const p = A.panner(s.g.position, 3, 0.9); p.connect(A.busSfx); return p; })()); } },
+        { every: [14, 30], fn: (A) => { const p = A.panner({ x: (Math.random() - 0.5) * 60, y: 1.5, z: -25 - Math.random() * 20 }, 6, 0.6); p.connect(A.busSfx); const t = A.ctx.currentTime, n = 4 + ((Math.random() * 3) | 0); for (let i = 0; i < n; i++) { A.noiseBurst(t + i * 0.16, 0.12, 'bandpass', 1100 + Math.random() * 300, 900, 0.05, A.busSfx, p); A.voice('sine', 470 + Math.random() * 60, t + i * 0.16, 0.01, 0.1, 0.03, A.busSfx, 0, p); } } },
+        { every: [4, 9], fn: (A) => A.chirp(0.02) },
+      ],
+    }, { root: 62, scale: 'pent', tempo: 44, timbre: 'box', seed: 88, density: 0.6, vol: 0.5, sparse: 0.5, motif: [2, 4, 3, 1, 2, null, 0, 1] });
+    L.onUpdate((dt, t) => {
+      if (waitT < 1e8) { waitT -= dt; if (waitT <= 0 && phrase < 3) { waitT = 1e9; startDemo(0.3); } }
+      if (phrase < 3 && !demo) { idleT += dt; if (idleT > 35) { idleT = 0; startDemo(0.5); } }
+      if (demo) { demo.t -= dt; if (demo.t <= 0) { ping(PHRASES[phrase][demo.i], true); demo.i++; demo.t = 0.78; if (demo.i >= PHRASES[phrase].length) { demo = null; waitT = 1e9; idleT = 0; } } }
+      for (const p of PIECES) { p.glow = Math.max(0, p.glow - dt * 1.2); p.halo.material.opacity = p.glow * 0.9; }
+      // physics-ish animation
+      swings.forEach((s, i) => { s.om += (-Math.sin(s.th) * 5.2 - s.om * 0.16 + (i !== 1 ? Math.sin(t * 0.9 + i * 2) * 0.35 : 0)) * dt; s.th += s.om * dt; s.g.rotation.z = s.th; });
+      cSpin = damp(cSpin, 0, 0.25, dt); carousel.rotation.y += cSpin * dt;
+      ssV += (-ssA * 26 - ssV * 2.2) * dt; ssA += ssV * dt; seesaw.rotation.z = clamp(ssA, -0.3, 0.3) * 0.25;
+      for (const b of bells) { b.v += (-b.a * 40 - b.v * 1.6) * dt; b.a += b.v * dt; b.g.rotation.x = b.a * 0.4; }
+      // pieces' halos follow their animated objects
+      PIECES[0].halo.position.set(-9 + Math.sin(swings[1].th) * -1.9, 2.7 - Math.cos(swings[1].th) * 1.9 + 0.3, -4); PIECES[1].halo.position.set(8, 1.5, -6);
+    });
+  },
+}]);
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════
+   LEVEL 9 — STATIC CINEMA / VIDEO STORE.  Shelves of blank tapes, a wall of CRTs full of static.
+   Three tapes are not blank (the lantern finds them). Pull one to the VCR on the counter: the big TV opens a doorway
+   into a small room made from someone's evening. Each room keeps one memory.
+   ═════════════════════════════════════════════════════════════════════════════════════════════ */
+function makeStaticMaterial(tint = [0.85, 0.95, 1.0], edge = false) {
+  return new ShaderMaterial({
+    uniforms: { uTime: TIME_U, uTint: { value: new Color().setRGB(tint[0], tint[1], tint[2]) }, uAmt: { value: 1 }, uEdge: { value: edge ? 1 : 0 }, uRate: { value: Save.s.flash !== false ? 18 : 2.5 } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `varying vec2 vUv; uniform float uTime, uAmt, uEdge, uRate; uniform vec3 uTint;
+      float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+      void main(){
+        vec2 uv = vUv; float t = floor(uTime * uRate);
+        float n = h(floor(uv * vec2(140.0, 105.0)) + t * 1.7);
+        float band = sin(uv.y * 5.0 - uTime * 1.1) * 0.5 + 0.5; n = mix(n, n * 0.55 + 0.22, band * 0.45);
+        float scan = 0.82 + 0.18 * sin(uv.y * 380.0);
+        vec3 c = vec3(n) * scan * uTint * uAmt;
+        if (uEdge > 0.5) { vec2 f = fract(uv); float e = smoothstep(0.0, 0.1, f.x) * smoothstep(1.0, 0.9, f.x) * smoothstep(0.0, 0.05, f.y) * smoothstep(1.0, 0.95, f.y); c = c * e + uTint * (1.0 - e) * 1.4; }
+        gl_FragColor = vec4(c, 1.0);
+      }`,
+  });
+}
+Levels.register([{
+  id: 8, name: 'Static Cinema',
+  build(L) {
+    const SX = 12, SZ = 8, H = 3.2;
+    L.env({ fog: [0x160c24, 0.03], hemi: [0x8f78d0, 0x2c1c3c, 0.5], key: { color: 0xd0c8f0, i: 3.4, pos: [0, 2, 0], dist: 12, decay: 2, follow: [0, 0.8, 0] }, fill: { color: 0x9fc8ff, i: 6, pos: [0, 1.7, -7], dist: 13, decay: 2 }, haze: [0xa080e0, 0.03] });
+    L.fragColor = 0xe8f4ff;
+    const fb = L.builderWith('floor', L.lambert('floorM', L.tex('floorT', () => TEX.carpet({ base: '#3a2a68', accent: '#c04a9a', seed: 4, diamonds: true }))));
+    const wb = L.builderWith('wall', L.lambert('wallM', L.tex('wallT', () => TEX.plaster({ base: '#6a5a8a', seed: 7, cracks: 2 })))), cb = L.builderWith('ceil', L.lambert('ceilM', L.tex('ceilT', () => TEX.ceiling({ base: '#8a809a', seed: 5, n: 3 }))));
+    const B = L.b('flat'), GB = L.b('glowb'), gf = L.glow(120), R = makeRng(23);
+    fb.flat(-SX, -SZ, SX, SZ, 0, 0xffffff, 3, true); cb.flat(-SX, -SZ, SX, SZ, H, 0xffffff, 3, false);
+    wb.wall(-SX, -SZ, SX, -SZ, 0, H, 0, 1, 0xffffff, 4, 0); wb.wall(SX, -SZ, SX, SZ, 0, H, -1, 0, 0xffffff, 4, 0); wb.wall(-SX, SZ, SX, SZ, 0, H, 0, -1, 0xffffff, 4, 0);
+    const EZ = 5.5; L.doorway(-SX, EZ, Math.PI / 2, { cs: 5, wallH: H, w: 1.2, h: 2.3, wb, wuv: 4 }); wb.wall(-SX, -SZ, -SX, EZ - 2.5, 0, H, 1, 0, 0xffffff, 4, 0); wb.wall(-SX, EZ + 2.5, -SX, SZ, 0, H, 1, 0, 0xffffff, 4, 0);
+    L.box(-SX - 3, -3, -SZ - 3, SX + 3, H, -SZ); L.box(SX, -3, -SZ, SX + 3, H, SZ); L.box(-SX - 3, -3, SZ, SX + 3, H, SZ + 3); L.box(-SX - 3, -3, -SZ, -SX, H, EZ - 2.6); L.box(-SX - 3, -3, EZ + 2.6, -SX, H, SZ);
+    // ── shelves of blank tapes (one InstancedMesh) ──
+    const SH = [{ z: -4.6 }, { z: -0.8 }, { z: 3.0 }], x0 = -10, x1 = -1.6, LV = [0.35, 0.78, 1.21, 1.64], PITCH = 0.036;
+    const tapeGeo = L.geo('tapeG', () => new BoxGeometry(0.034, 0.19, 0.1)), maxN = 3 * 2 * 4 * Math.ceil((x1 - x0) / PITCH);
+    const tm = new InstancedMesh(tapeGeo, L.mat('tapeM', () => new MeshLambertMaterial({ color: 0xffffff })), maxN), dummy = new Object3D(), col = new Color(), tapeCols = [0x2a2a30, 0x33303a, 0x3a3036, 0x262c36, 0x40404a, 0x2e3a36, 0x48403a, 0x1e1e24];
+    const SPECIAL = [{ sh: 0, face: 1, lv: 2, ix: 40, col: 0xffd28a, name: "DAD'S PICK" }, { sh: 1, face: -1, lv: 1, ix: 150, col: 0x8affc8, name: 'SUMMER 91' }, { sh: 2, face: 1, lv: 3, ix: 90, col: 0xff8ac8, name: 'FRIDAY NIGHT' }];
+    let ti = 0; const tapePos = [];
+    SH.forEach((s, si) => {
+      B.box((x0 + x1) / 2, 1.0, s.z, x1 - x0 + 0.3, 2.0, 0.34, 0x5a4a6a, 1); for (const lv of LV) B.box((x0 + x1) / 2, lv - 0.13, s.z, x1 - x0 + 0.3, 0.03, 0.9, 0x6a5a7a, 1); B.box(x0 - 0.15, 1.0, s.z, 0.06, 2.05, 0.92, 0x4a3a5a, 1); B.box(x1 + 0.15, 1.0, s.z, 0.06, 2.05, 0.92, 0x4a3a5a, 1); B.box((x0 + x1) / 2, 2.03, s.z, x1 - x0 + 0.36, 0.05, 0.94, 0x4a3a5a, 1);
+      L.box(x0 - 0.2, 0, s.z - 0.47, x1 + 0.2, 2.1, s.z + 0.47);
+      for (const face of [1, -1]) LV.forEach((lv, li) => { const n = Math.ceil((x1 - x0) / PITCH); for (let i = 0; i < n; i++) {
+        const sp = SPECIAL.find((q) => q.sh === si && q.face === face && q.lv === li && q.ix === i);
+        const x = x0 + i * PITCH + 0.02, z = s.z + face * 0.33; if (sp) { sp.pos = new Vector3(x, lv, z); continue; } if (R() < 0.07) continue;
+        dummy.position.set(x, lv, z); dummy.rotation.set(0, 0, 0); dummy.scale.set(1, R.range(0.94, 1.03), 1); dummy.updateMatrix(); tm.setMatrixAt(ti, dummy.matrix); col.setHex(R.pick(tapeCols)); tm.setColorAt(ti, col); ti++; } });
+      L.sign(['NEW RELEASES', 'COMEDY', 'DRAMA'][si], (x0 + x1) / 2, 2.45, s.z, 2.6, 0.4, { fg: '#ffd8a8', bg: 'rgba(30,20,40,.8)', size: 44, cw: 512, yaw: 0, double: true });
+    });
+    tm.count = ti; tm.instanceMatrix.needsUpdate = true; if (tm.instanceColor) tm.instanceColor.needsUpdate = true; tm.frustumCulled = false; L.add(tm);
+    // ── the CRT wall ──
+    const CRT = L.builderWith('crt', L.mat('crtM', () => makeStaticMaterial([0.8, 0.95, 1.0])), false, false);
+    for (let c = 0; c < 9; c++) for (let rr = 0; rr < 3; rr++) {
+      const x = -4.4 + c * 1.1, y = 0.75 + rr * 0.85, z = -SZ + 0.32, u = R.int(0, 60), v = R.int(0, 60);
+      B.box(x, y, z - 0.05, 0.98, 0.76, 0.5, 0x2a2630, 1); CRT.quad([x - 0.4, y - 0.3, z + 0.21, x + 0.4, y - 0.3, z + 0.21, x + 0.4, y + 0.3, z + 0.21, x - 0.4, y + 0.3, z + 0.21], [0, 0, 1], [u, v, u + 1, v, u + 1, v + 1, u, v + 1], 0xffffff, 1);
+    }
+    L.collider(0, -SZ + 0.4, 5.2, 0.5, 0, 0, 3, { noray: true });
+    gf.add(0, 1.6, -SZ + 1, 9, 0x8ab8ff, 0.06, 0);
+    // slow-scan pictures on three screens
+    const pics = ['home', 'hall', 'kitchen'].map((k, i) => { const t = L.tex('pic' + k, () => cTex(256, 192, (g, w, h) => { const gr = g.createLinearGradient(0, 0, 0, h); if (k === 'home') { gr.addColorStop(0, '#2a2044'); gr.addColorStop(1, '#5a3a3a'); g.fillStyle = gr; g.fillRect(0, 0, w, h); g.fillStyle = '#ffd08a'; g.fillRect(150, 40, 60, 70); g.fillStyle = '#1a1420'; g.fillRect(30, 100, 120, 60); g.fillRect(180, 110, 50, 50); } else if (k === 'hall') { gr.addColorStop(0, '#101828'); gr.addColorStop(1, '#3a4a60'); g.fillStyle = gr; g.fillRect(0, 0, w, h); g.strokeStyle = '#8ab0d8'; g.lineWidth = 3; for (let q = 0; q < 6; q++) { const o = q * 14; g.strokeRect(20 + o, 10 + o * 0.6, 216 - o * 2, 172 - o * 1.2); } } else { gr.addColorStop(0, '#0e1a30'); gr.addColorStop(1, '#2a3a54'); g.fillStyle = gr; g.fillRect(0, 0, w, h); g.fillStyle = '#c8d8f0'; g.fillRect(90, 30, 76, 130); g.fillStyle = '#e0f0ff'; g.beginPath(); g.arc(210, 40, 14, 0, TAU); g.fill(); } for (let y = 0; y < h; y += 3) { g.fillStyle = 'rgba(0,0,0,.25)'; g.fillRect(0, y, w, 1); } grunge(g, w, h, 0.09, 1); }, { repeat: false })); const m = new Mesh(L.geo('picG', () => new PlaneGeometry(0.8, 0.6)), new MeshBasicMaterial({ map: t })); m.position.set(-4.4 + [1, 4, 7][i] * 1.1, 0.75 + [2, 0, 1][i] * 0.85, -SZ + 0.32 + 0.211); L.add(m); return m; });
+    // ── counter, VCR, big TV portal, decor ──
+    B.box(8.7, 0.5, 0, 1.3, 1.0, 7, 0x5a3a4a, 1); B.box(8.7, 1.02, 0, 1.4, 0.05, 7.1, 0x8a6a7a, 1); L.box(8.05, 0, -3.6, 9.4, 1.05, 3.6);
+    B.box(8.4, 1.15, -0.6, 0.6, 0.16, 0.42, 0x1a1a20, 1); GB.box(8.09, 1.16, -0.6, 0.01, 0.02, 0.3, 0xff3a3a); B.box(8.4, 1.32, 1.4, 0.6, 0.5, 0.5, 0x2a2630, 1); GB.box(8.09, 1.32, 1.4, 0.01, 0.34, 0.4, 0x9fc0e0);
+    B.box(8.4, 1.2, 2.6, 0.5, 0.35, 0.4, 0xd8d0b8, 1); B.cyl(8.9, 1.3, -2.6, 0.35, 0.3, 0.5, 10, 0xd85a4a); GB.sphere(8.9, 1.7, -2.6, 0.22, 0xffd28a, 1, 1, 1, 8); gf.add(8.9, 1.7, -2.6, 1.6, 0xffc060, 0.08, 0);
+    const vcr = new Vector3(8.15, 1.3, -0.6); const slot = L.slot(vcr, 0.55, (b) => b.tag === 'tape', (b) => openPortal(b.tape), () => closePortal());
+    L.sign('BE KIND,\nREWIND', SX - 0.06, 2.3, 0, 1.6, 0.9, { fg: '#ffd8a8', bg: 'rgba(40,20,40,.85)', border: '#e08ac0', size: 48, cw: 512, yaw: -Math.PI / 2 });
+    L.secret({ x: SX - 0.09, y: 1.45, z: 1.5, glyph: 'heart', yaw: -Math.PI / 2, size: 0.55, r: 0.5, c: '#ffd0e0' });
+    const OPEN = L.mat('openM', () => new MeshBasicMaterial({ map: textTex('OPEN', 512, 160, { fg: '#ff5a8a', size: 130, glow: '#ff2a70', bold: true, family: '"Trebuchet MS", Arial, sans-serif' }), transparent: true, depthWrite: false, blending: AdditiveBlending })); const open = new Mesh(L.geo('openG', () => new PlaneGeometry(1.6, 0.5)), OPEN); open.position.set(SX - 0.05, 2.75, -3.5); open.rotation.y = -Math.PI / 2; L.add(open);
+    const posters = L.builderWith('poster', L.mat('posterM', () => new MeshBasicMaterial({ map: L.tex('posterT', () => cTex(1024, 512, (g, w, h) => { const t = ['THE LONG WEEKEND', 'MIDNIGHT ARCADE', 'A SUMMER TO KEEP', 'HOME ALONE (AT LAST)', 'THE CLOCK STOPS', 'LAST TRAIN HOME', 'SUBURBIA', 'TAPE 12']; t.forEach((s, i) => { const x = (i % 4) * 256, y = Math.floor(i / 4) * 256, gr = g.createLinearGradient(x, y, x, y + 256); gr.addColorStop(0, ['#3a1a6a', '#0a3a5a', '#6a2a3a', '#2a4a2a'][i % 4]); gr.addColorStop(1, '#101020'); g.fillStyle = gr; g.fillRect(x + 4, y + 4, 248, 248); g.fillStyle = '#ffd8a8'; g.font = '700 24px Georgia, serif'; g.textAlign = 'center'; g.fillText(s, x + 128, y + 226, 230); g.fillStyle = 'rgba(255,255,255,.18)'; g.beginPath(); g.arc(x + 128, y + 110, 56 + (i % 3) * 8, 0, TAU); g.fill(); }); }, { repeat: false, aniso: 4 })), vertexColors: true })), false, false);
+    for (let i = 0; i < 8; i++) { const c = i % 4, rw = i >> 2, u0 = c / 4, v1 = 1 - rw / 2, x = -9.5 + i * 2.4, z = SZ - 0.03; posters.quad([x + 0.6, 0.9, z, x - 0.6, 0.9, z, x - 0.6, 2.1, z, x + 0.6, 2.1, z], [0, 0, -1], [u0 + 0.25, v1 - 0.5, u0, v1 - 0.5, u0, v1, u0 + 0.25, v1], 0xffffff, 1); }
+    Props.plant(B, 10.6, 6.8, 1.3, { pot: 0x4a3a5a, leaf: 0x4a7a5a }); Props.plant(B, -10.8, -7.2, 1.2, { pot: 0x4a3a5a, leaf: 0x4a7a5a }); Props.bench(B, 3, 6.8, Math.PI, 1.6, { wood: 0x4a3a5a, cushion: 0x7a3a6a });
+    for (let x = -9; x <= 9; x += 3) for (const z of [-4, 1, 5.5]) GB.box(x, H - 0.03, z, 1.0, 0.05, 0.3, ((x + z) | 0) % 2 ? 0xd8d0f0 : 0x555060);
+    // exit niche + door
+    L.glowCell(-SX - 3.4, EZ - 2.4, -SX - 0.02, EZ + 2.4, 0, 3, 'e', 0xfff4e4); L.box(-SX - 3.6, -2, EZ - 2.6, -SX, 3.4, EZ + 2.6, { noray: true });
+    L.exit({ x: -SX, z: EZ, yaw: Math.PI / 2, w: 1.2, h: 2.3, glow: 0xfff6e8 }); L.sign('EMPLOYEES ONLY', -SX + 0.05, 2.75, EZ, 1.5, 0.3, { fg: '#ff8a7a', bg: '#1a1010', size: 40, cw: 512, yaw: Math.PI / 2 });
+    // ── special tapes ──
+    const tapes = SPECIAL.map((sp, i) => {
+      const m = new Mesh(L.geo('tapeS', () => new BoxGeometry(0.036, 0.19, 0.1)), new MeshLambertMaterial({ color: sp.col, emissive: sp.col, emissiveIntensity: 0.05 })); m.position.copy(sp.pos); L.add(m);
+      const b = L.body(m, [0.02, 0.1, 0.055], { hold: 0.9, label: 'Hold to pull the tape', pickHalf: [0.12, 0.16, 0.1], range: 9, tag: 'tape', bounce: 0.1, loud: 0.3 }); b.tape = i; b.rest = true; b.frozen = true; b.home = sp.pos.clone();
+      const gTex = L.tex('gt' + i, () => textTex(sp.name, 512, 96, { fg: '#ffffff', size: 62, glow: '#fff0c0', italic: true }));
+      L.ghost(gTex, sp.pos.x, sp.pos.y + 0.22, sp.pos.z + (i === 1 ? -0.4 : 0.4) * 0.999, 0.7, 0.13, { yaw: i === 1 ? Math.PI : 0, color: 0xfff0c0, range: 5, max: 0.95 });
+      L.mark(sp.pos.x, sp.pos.y, sp.pos.z + (i === 1 ? -0.34 : 0.34), { glyph: 'circle', size: 0.28, yaw: i === 1 ? Math.PI : 0, c: '#ffe8b0', max: 1, range: 6 });
+      return b;
+    });
+    // ── the portal doorway in front of the big CRT wall ──
+    const portalMat = makeStaticMaterial([1, 1, 1], true), portal = new Mesh(L.geo('portG', () => new PlaneGeometry(1.4, 2.3)), portalMat); portal.position.set(0, 1.18, -6.9); portal.scale.set(0.001, 0.001, 1); portal.visible = false; L.add(portal);
+    let portalTape = -1, portalK = 0, portalOpen = false;
+    function openPortal(i) { portalTape = i; portalOpen = true; { const c = hexRGB(SPECIAL[i].col); portalMat.uniforms.uTint.value.setRGB(c[0], c[1], c[2]); } portal.visible = true; AudioSys.chord({ root: 57, scale: 'minor' }, [0, 2, 4, 7], 'glass', 0.4); toastHook('The big TV opens. Step through.', 4); L.progress(); }
+    function closePortal() { portalOpen = false; portalTape = -1; }
+    L.interact({ obj: portal, half: new Vector3(0.75, 1.2, 0.35), label: 'Step through', enabled: () => portalOpen && portalK > 0.8, onSelect: () => enterMicro(portalTape) });
+    // ── micro-rooms ──
+    const MR = [], IW = L.builderWith('iwall', L.lambert('iwM', L.tex('iwT', () => TEX.wallpaper({ bg: '#c8b8d8', fg: '#a898c0', style: 'stripe', wear: 0.4, seed: 4 })))), IF = L.builderWith('ifl', L.lambert('ifM', L.tex('ifT', () => TEX.wood({ base: '#7a5a42', planks: 8, size: 512, seed: 9 })))), IC = L.builderWith('ice', L.lambert('icM', L.tex('icT', () => TEX.plaster({ base: '#d8d0e0', seed: 3 }))));
+    const microFloor = (cx, cz, w, d, h, tint) => { const x0 = cx - w / 2, x1 = cx + w / 2, z0 = cz - d / 2, z1 = cz + d / 2; IF.flat(x0, z0, x1, z1, 0, 0xffffff, 2, true); IC.flat(x0, z0, x1, z1, h, 0xffffff, 2, false); IW.wall(x0, z0, x1, z0, 0, h, 0, 1, tint, 2, 0); IW.wall(x0, z0, x0, z1, 0, h, 1, 0, tint, 2, 0); IW.wall(x1, z0, x1, z1, 0, h, -1, 0, tint, 2, 0); IW.wall(x0, z1, x1, z1, 0, h, 0, -1, tint, 2, 0); L.box(x0 - 0.6, -1, z0 - 0.6, x1 + 0.6, h + 1, z0); L.box(x0 - 0.6, -1, z1, x1 + 0.6, h + 1, z1 + 0.6); L.box(x0 - 0.6, -1, z0, x0, h + 1, z1); L.box(x1, -1, z0, x1 + 0.6, h + 1, z1); return { x0: x0 + 0.3, x1: x1 - 0.3, z0: z0 + 0.3, z1: z1 - 0.3 }; };
+    const back = (mx, mz, d, i) => { const p = new Mesh(L.geo('portG'), makeStaticMaterial([0.9, 0.9, 1], true)); { const c = hexRGB(SPECIAL[i].col); p.material.uniforms.uTint.value.setRGB(c[0], c[1], c[2]); } p.position.set(mx, 1.18, mz + d / 2 - 0.06); p.rotation.y = Math.PI; L.add(p); L.interact({ obj: p, half: new Vector3(0.75, 1.2, 0.4), label: 'Back to the store', onSelect: () => exitMicro(i) }); };
+    // room 1: the living room
+    { const mx = 500, mz = 0, b = microFloor(mx, mz, 6, 5, 2.6, 0xe8d8c8); MR[0] = { b, mx, mz, d: 5, col: 0xffd28a, fill: [0xffc880, 7], fx: [mx - 1.2, 1.9, mz - 0.5] };
+      B.box(mx - 1.6, 0.25, mz + 0.4, 2.0, 0.5, 0.9, 0x8a5a4a, 1); B.box(mx - 1.6, 0.68, mz + 0.05, 2.0, 0.55, 0.22, 0x8a5a4a, 1); B.box(mx + 1.6, 0.3, mz - 0.2, 0.9, 0.6, 0.9, 0x5a4a3a, 1); B.box(mx + 1.6, 0.9, mz - 0.5, 0.9, 0.9, 0.2, 0x5a4a3a, 1); B.box(mx, 0.004, mz, 3.6, 0.01, 2.6, 0x6a3a3a, 1);
+      B.box(mx, 0.35, mz - 2.2, 0.9, 0.7, 0.55, 0x2a2630, 1); CRT.quad([mx - 0.32, 0.5, mz - 1.92, mx + 0.32, 0.5, mz - 1.92, mx + 0.32, 0.95, mz - 1.92, mx - 0.32, 0.95, mz - 1.92], [0, 0, 1], [7, 7, 8, 7, 8, 8, 7, 8], 0xffffff, 1);
+      Props.lamp(B, GB, gf, mx - 2.6, mz - 1.9, { h: 1.5 }); L.fragment(0, mx - 1.6, 1.0, mz + 0.4, { range: 3 }); back(mx, mz, 5, 0); L.sign('friday. he let me choose.', mx + 2.94, 1.7, mz, 1.8, 0.4, { fg: '#4a3a24', bg: '#f2e8d0', border: '#a88a5a', size: 34, cw: 512, yaw: -Math.PI / 2 }); }
+    // room 2: the corridor of screens
+    { const mx = 540, mz = 0, b = microFloor(mx, mz, 3, 22, 2.6, 0x3a3a52); MR[1] = { b, mx, mz, d: 22, col: 0x8affc8, fill: [0x8ab0ff, 6], fx: [mx, 2.2, mz] };
+      for (let i = 0; i < 20; i++) for (const sx of [-1, 1]) for (const rr of [0, 1]) { const z = mz - 10 + i * 1.0, y = 0.8 + rr * 0.9, x = mx + sx * 1.44, u = R.int(0, 80), v = R.int(0, 80); B.box(mx + sx * 1.49, y, z, 0.1, 0.78, 0.9, 0x2a2630, 1); CRT.quad(sx > 0 ? [x - 0.02, y - 0.32, z + 0.4, x - 0.02, y - 0.32, z - 0.4, x - 0.02, y + 0.32, z - 0.4, x - 0.02, y + 0.32, z + 0.4] : [x + 0.02, y - 0.32, z - 0.4, x + 0.02, y - 0.32, z + 0.4, x + 0.02, y + 0.32, z + 0.4, x + 0.02, y + 0.32, z - 0.4], [-sx, 0, 0], [u, v, u + 1, v, u + 1, v + 1, u, v + 1], 0xffffff, 1); }
+      L.fragment(1, mx, 1.35, mz - 9.2, { range: 3 }); back(mx, mz, 22, 1); gf.add(mx, 1.4, mz - 9.5, 4, 0x8affc8, 0.06, 0); }
+    // room 3: the kitchen at night
+    { const mx = 580, mz = 0, b = microFloor(mx, mz, 5, 5, 2.6, 0xc8d0e8); MR[2] = { b, mx, mz, d: 5, col: 0xff8ac8, fill: [0xa8c0ff, 6], fx: [mx, 1.9, mz - 0.6] };
+      Props.table(B, mx, mz - 0.3, 1.2, 0.8, 0.75, 0, { top: 0xc9a878 }); Props.chair(B, mx - 0.5, mz + 0.4, Math.PI); Props.chair(B, mx + 0.5, mz + 0.4, Math.PI); B.box(mx + 1.9, 0.95, mz - 1.8, 0.8, 1.9, 0.7, 0xe0dcd0, 1);
+      for (let i = 0; i < 5; i++) B.box(mx - 1.8 + i * 0.9, 0.45, mz - 2.2, 0.85, 0.9, 0.5, i % 2 ? 0xc8c0b0 : 0xb8b0a0, 1); B.box(mx, 0.92, mz - 2.2, 4.5, 0.05, 0.55, 0x6a5a4a, 1);
+      GB.box(mx, 1.6, mz - 2.49, 1.1, 0.9, 0.02, 0x9fc0ff); gf.add(mx, 1.6, mz - 2.1, 3.2, 0x9fc0ff, 0.03, 0); B.box(mx + 0.05, 0.8, mz - 0.3, 0.4, 0.04, 0.3, 0xf4f0e8, 1); L.fragment(2, mx, 1.05, mz - 0.3, { range: 3 }); back(mx, mz, 5, 2);
+      L.sign('the light stays on for me.', mx + 2.44, 1.75, mz + 0.3, 1.7, 0.4, { fg: '#4a3a24', bg: '#f2e8d0', border: '#a88a5a', size: 34, cw: 512, yaw: -Math.PI / 2 }); }
+    // enter / leave
+    const storeBounds = { x0: -SX + 0.5, x1: SX - 0.5, z0: -SZ + 0.6, z1: SZ - 0.5 }; let inMicro = -1, envT = 0;
+    L.bounds = storeBounds; L.spawn = { x: 10.3, y: 0, z: 6.2, yaw: 90 * DEG };
+    function enterMicro(i) { if (inMicro >= 0 || L.frozen) return; Fade.blink(() => { inMicro = i; const m = MR[i]; L.bounds = m.b; Player.placeAt(m.mx, 0, m.mz + m.d / 2 - 1.4, 0); }, 0.25, 0.08, 0.5); L.progress(); }
+    function exitMicro(i) { Fade.blink(() => { inMicro = -1; L.bounds = storeBounds; Player.placeAt(0, 0, -5.6, Math.PI); }, 0.25, 0.08, 0.5); }
+    L.hint(() => {
+      if (!L.fragEnts.some((f) => f && !f.got)) return null;
+      if (inMicro >= 0) { const f = L.fragEnts[inMicro], m = MR[inMicro]; return f.got ? new Vector3(m.mx, 1.2, m.mz + m.d / 2 - 0.5) : f.g.position; }
+      if (portalOpen && !L.fragEnts[portalTape].got) return portal.position;
+      const t = tapes.find((b, i) => !L.fragEnts[i].got && !b.snapped); return t ? t.pos : vcr;
+    });
+    L.audio({
+      noise: [{ type: 'white', filter: 'bandpass', freq: 2800, q: 0.5, gain: 0.02, lfo: { rate: 0.3, depth: 0.01 } }, { type: 'pink', filter: 'lowpass', freq: 500, gain: 0.05 }, { type: 'brown', filter: 'lowpass', freq: 150, gain: 0.07 }],
+      hum: { f0: 120, harm: [1, 2, 3, 6], gain: 0.008, lp: 1600, buzz: 0.5 }, drone: [{ f: 57, gain: 0.03, lp: 200, lfo: 0.04 }],
+      events: [{ every: [10, 25], fn: (A) => { A.noiseBurst(A.ctx.currentTime, 0.5, 'bandpass', 3000, 900, 0.05, A.busSfx); } }, { every: [30, 60], fn: (A) => { A.voice('sine', 2100, A.ctx.currentTime, 0.02, 0.7, 0.012, A.busSfx); } }],
+    }, { root: 57, scale: 'minor', tempo: 50, timbre: 'piano', seed: 91, density: 0.7, vol: 0.75, sparse: 0.3, motif: [4, 2, 0, 2, 4, null, 5, 4] });
+    const keyBase = 3.4 * Math.PI, sm = L.emitter({ x: 0, y: 1.6, z: -7.4 }, { type: 'white', filter: 'bandpass', freq: 3200, q: 0.5, gain: 0.05, ref: 3, roll: 1.1 });
+    L.onUpdate((dt, t) => {
+      envT = damp(envT, inMicro >= 0 ? 1 : 0, 4, dt); const m = inMicro >= 0 ? MR[inMicro] : null;
+      Lights.key.intensity = keyBase * (1 - 0.55 * envT);
+      if (m) { Lights.fill.color.setHex(m.fill[0]); Lights.fill.position.set(...m.fx); Lights.fill.intensity = m.fill[1] * Math.PI * envT; } else { Lights.fill.color.setHex(0x9fc8ff); Lights.fill.position.set(0, 1.7, -7); Lights.fill.intensity = 5 * Math.PI * (1 - envT) * (0.85 + 0.15 * Math.sin(t * 3.1) * Math.sin(t * 1.7)); }
+      portalK = damp(portalK, portalOpen ? 1 : 0, 3, dt); portal.scale.set(Math.max(0.001, portalK), Math.max(0.001, portalK), 1); if (portalK < 0.02 && !portalOpen) portal.visible = false;
+      if (sm.node) sm.node.gain.value = 0.05 * (1 - envT * 0.85);
+    });
+  },
+}]);
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════
+   LEVEL 10 — PARKING GARAGE IN FOG.  Sodium lights, concrete corridors, one lit car with its radio on.
+   The radio's spatial audio is your compass: it brightens as you get nearer, and muffles behind walls of concrete.
+   Ground maze (two memories) → outdoor ramp → the roof deck, where the radio car waits for the last memory.
+   ═════════════════════════════════════════════════════════════════════════════════════════════ */
+Levels.register([{
+  id: 9, name: 'Parking Garage in Fog',
+  build(L) {
+    const cs = 4, H = 3.0, RY = 3.0;
+    L.env({ fog: [0x2d1e14, 0.06], hemi: [0x8a6a4a, 0x2a2018, 0.46], key: { color: 0xffa850, i: 4.6, pos: [0, 2, 0], dist: 12, decay: 2, follow: [0, 0.9, 0] }, haze: [0xffa860, 0.035] });
+    L.fragColor = 0xffe8c0; L.stepMax = 0.42;
+    const fb = L.builderWith('floor', L.lambert('floorM', L.tex('floorT', () => TEX.concrete({ base: '#6a6862', seed: 3, stains: 1.0, seams: true }))));
+    const wb = L.builderWith('wall', L.lambert('wallM', L.tex('wallT', () => TEX.concrete({ base: '#807e76', seed: 8, stains: 0.9 })))), cb = L.builderWith('ceil', L.lambert('ceilM', L.tex('ceilT', () => TEX.concrete({ base: '#5a5852', seed: 12, stains: 0.8, seams: false }))));
+    const roof = L.builderWith('roof', L.lambert('roofM', L.tex('roofT', () => TEX.asphalt({ base: '#4a4844', seed: 5 }))));
+    const B = L.b('flat'), GB = L.b('glowb'), gf = L.glow(110), R = makeRng(41);
+    const MAP = [
+      '###############',
+      '#S..#.....#.#q#',
+      '#.#.#.###.#.#q#',
+      '#.#...#...#.#q#',
+      '#.#####.###.#q#',
+      '#.....#...#.#q#',
+      '#####.#.#.#.#q#',
+      '#.....#.#...rq#',
+      '###############',
+    ];
+    const G = L.grid(MAP, { cs, h: H, fb, fuv: 4, cb, cuv: 4, wb, wuv: 3, cTop: H, cBot: -1, noFC: 'q' });
+    const S = G.marks.S[0]; L.spawn = { x: S.x, y: 0, z: S.z, yaw: -90 * DEG }; L.bounds = { x0: G.X(0) + 0.5, x1: G.X(14) - 0.5, z0: G.Z(0) + 0.5, z1: G.Z(9) - 0.5 };
+    const RX0 = G.X(0), RX1 = G.X(13), RZ0 = G.Z(0), RZ1 = G.Z(9), RAMP = { x0: G.X(13), x1: G.X(14), z0: G.Z(1), z1: G.Z(8) };
+    L.sky({ top: 0x2a1a10, mid: 0x8a5a30, bot: 0x2a2018, cloud: 0.5, cloudCol: 0x9a6a40, sun: 0x000000, cloudSpeed: 0.003, stars: 0.12, seed: 4 });
+    // ── ramp (outdoors, along the east side) ──
+    const rz0 = RAMP.z1, rz1 = RAMP.z0, rise = RY / (rz0 - rz1);
+    roof.quad([RAMP.x0, 0, rz0, RAMP.x1, 0, rz0, RAMP.x1, RY, rz1, RAMP.x0, RY, rz1], [0, 0.99, 0.12], [RAMP.x0 / 4, -rz0 / 4, RAMP.x1 / 4, -rz0 / 4, RAMP.x1 / 4, -rz1 / 4, RAMP.x0 / 4, -rz1 / 4], 0xffffff, 1);
+    wb.wall(RAMP.x1, rz1, RAMP.x1, rz0, H, RY + 1.4, -1, 0, 0xffffff, 4, 0);
+    for (let z = rz1 + 2; z < rz0; z += 4) { const y = RY * (rz0 - z) / (rz0 - rz1); B.box(RAMP.x0 + 2, y + 0.02, z, 0.12, 0.02, 2.2, 0xe8c840, 1); GB.box(RAMP.x1 - 0.1, y + 0.7, z, 0.04, 0.3, 1.2, 0xffa840); gf.add(RAMP.x1 - 0.5, y + 0.9, z, 1.8, 0xffa040, 0.04, 0); }
+    L.box(RAMP.x1, -1, rz1 - 2, RAMP.x1 + 2, 7, rz0 + 2);
+    // ── roof deck: parapets, lights, cars, stair tower ──
+    roof.flat(RX0, RZ0, RX1, RZ1, RY, 0xffffff, 4, true);
+    const par = (x, z, w, d) => { B.box(x, RY + 0.55, z, w, 1.1, d, 0x8a8880, 2); L.box(x - w / 2, RY - 0.1, z - d / 2, x + w / 2, RY + 1.6, z + d / 2); };
+    par((RX0 + RX1) / 2, RZ0 + 0.25, RX1 - RX0, 0.5); par((RX0 + RX1) / 2, RZ1 - 0.25, RX1 - RX0, 0.5); par(RX0 + 0.25, (RZ0 + RZ1) / 2, 0.5, RZ1 - RZ0);
+    par(RX1 - 0.25, (RZ0 + G.Z(1)) / 2, 0.5, G.Z(1) - RZ0); par(RX1 - 0.25, (G.Z(2) + RZ1) / 2, 0.5, RZ1 - G.Z(2));
+    const lampAt = (x, z, roofLevel) => { const y0 = roofLevel ? RY : 0, top = y0 + (roofLevel ? 4.4 : H - 0.3); if (roofLevel) { B.cyl(x, y0 + 2.2, z, 0.08, 0.11, 4.4, 6, 0x3a3a38); B.box(x + 0.6, top, z, 1.3, 0.08, 0.1, 0x3a3a38, 1); GB.box(x + 1.15, top - 0.08, z, 0.55, 0.06, 0.25, 0xffb85a); gf.add(x + 1.15, top - 0.15, z, 3.6, 0xffa040, 0.05, 0); L.ray(x + 1.15, top - 0.1, z, 1.4, top - RY + 0.2, 0xffb060, 0.1, { wb: 5.2 }); } else { GB.box(x, top, z, 1.2, 0.05, 0.3, 0xffb060); gf.add(x, top - 0.2, z, 2.6, 0xffa040, 0.05, 0); } };
+    for (const [x, z] of [[-24, -10], [-24, 8], [-12, -14], [-12, 4], [0, -12], [0, 8], [10, -14], [10, 6], [16, -6], [16, 12]]) lampAt(x, z, true);
+    for (let gz = 1; gz <= 7; gz++) for (let gx = 1; gx <= 11; gx++) if (G.isF(gx, gz) && (gx + gz) % 2 === 0) lampAt(G.cx(gx), G.cz(gz), false);
+    const car = (x, y, z, yaw, c, col = true) => { B.push(x, y, z, yaw); B.box(0, 0.5, 0, 4.4, 0.62, 1.85, c, 1); B.box(-0.2, 1.05, 0, 2.3, 0.55, 1.65, c, 1); GB.push(x, y, z, yaw); GB.box(-0.2, 1.08, 0, 2.32, 0.42, 1.68, 0x0c121c); GB.pop(); for (const dx of [-1.4, 1.4]) for (const dz of [-0.9, 0.9]) { B.push(dx, 0.32, dz, 0, Math.PI / 2, 0); B.cyl(0, 0, 0, 0.32, 0.32, 0.26, 10, 0x141414); B.pop(); } B.pop(); if (col) L.collider(x, z, 2.25, 0.95, yaw, y, y + 1.6, {}); };
+    const cc = [0x8a2a2a, 0x2a4a7a, 0x8a8a7a, 0x2a5a4a, 0x7a5a2a, 0x5a5a6a, 0xa89a6a];
+    for (let i = 0; i < 6; i++) { car(-20 + i * 2.5, RY, -15.6, Math.PI / 2, R.pick(cc)); car(-20 + i * 2.5, RY, 15.6, Math.PI / 2, R.pick(cc)); }
+    car(-28, RY, -4, Math.PI / 2, R.pick(cc)); car(-28, RY, 2, Math.PI / 2, R.pick(cc)); car(-10, RY, 0, 0.3, R.pick(cc)); car(-6, RY, -8, Math.PI / 2, R.pick(cc)); car(10, RY, 0, 0.1, R.pick(cc)); car(4, RY, 11, Math.PI / 2, R.pick(cc)); car(15, RY, -16, Math.PI / 2, R.pick(cc));
+    for (let i = -14; i <= 22; i += 4) B.box(i, RY + 0.012, 5, 0.12, 0.02, 4, 0xe8e0c0, 1);
+    // the stair tower with the exit
+    const TX0 = RX0, TX1 = RX0 + 6, TZ0 = RZ0, TZ1 = RZ0 + 6, TH = 3.2; wb.wall(TX0, TZ0, TX0, TZ1, RY, RY + TH, -1, 0, 0xffffff, 3, 0); wb.wall(TX0, TZ0, TX1, TZ0, RY, RY + TH, 0, -1, 0xffffff, 3, 0); wb.wall(TX1, TZ0, TX1, TZ1, RY, RY + TH, 1, 0, 0xffffff, 3, 0); B.box((TX0 + TX1) / 2, RY + TH + 0.1, (TZ0 + TZ1) / 2, 6.2, 0.2, 6.2, 0x8a8880, 2);
+    const ex = (TX0 + TX1) / 2; L.doorway(ex, TZ1, 0, { cs: 6, y: RY, wallH: TH, w: 1.3, h: 2.4, wb, wuv: 3 }); L.glowCell(TX0 + 0.03, TZ0 + 0.03, TX1 - 0.03, TZ1 - 0.03, RY + 0.01, RY + TH, 's', 0xfff2dc); L.box(TX0, RY - 0.1, TZ0, TX1, RY + TH + 0.3, TZ1, { noray: true }); gf.add(ex, RY + 1.6, TZ0 + 2, 4, 0xfff0d0, 0.02, 0);
+    L.exit({ x: ex, y: RY, z: TZ1, yaw: 0, w: 1.3, h: 2.4, glow: 0xfff4e0 }); L.sign('STAIRS\nEXIT', ex, RY + 3.0, TZ1 + 0.12, 1.2, 0.6, { fg: '#ff5a4a', bg: '#14100c', size: 48, cw: 384, yaw: 0, bold: true });
+    // ── the radio car (lit, doors ajar in spirit) ──
+    const rcx = G.X(9), rcz = G.Z(3), rc = new Vector3(rcx, RY + 1.0, rcz);
+    car(rcx, RY, rcz, Math.PI / 2, 0x9a3a3a, true); GB.push(rcx, RY, rcz, Math.PI / 2); GB.box(2.1, 0.62, -0.62, 0.12, 0.16, 0.34, 0xfff0c8); GB.box(2.1, 0.62, 0.62, 0.12, 0.16, 0.34, 0xfff0c8); GB.box(-0.2, 1.42, 0, 0.5, 0.05, 0.5, 0xffd8a0); GB.pop(); gf.add(rcx, RY + 1.2, rcz, 3.4, 0xffd098, 0.04, 0);
+    L.ray(rcx - 2.6, RY + 0.8, rcz - 0.6, 1.4, 4.2, 0xfff0c8, 0.12, { tx: 0, tz: 1.35, wb: 2.8, ry: 0 }); L.ray(rcx - 2.6, RY + 0.8, rcz + 0.6, 1.4, 4.2, 0xfff0c8, 0.12, { tz: 1.35, wb: 2.8 });
+    L.secret({ x: rcx - 1.4, y: RY + 0.96, z: rcz, glyph: 'heart', rx: -Math.PI / 2, size: 0.6, r: 0.5, c: '#ffd0d8', range: 5 });
+    const f3 = L.fragment(2, rcx, RY + 2.1, rcz);
+    // ── maze dressing: a lit car with F1, a phone booth with F2, corridor cars, barriers, painted lines ──
+    const c1 = { x: G.cx(11), z: G.cz(1) }; car(c1.x, 0, c1.z + 0.3, Math.PI / 2, 0x3a5a8a); GB.box(c1.x, 1.42, c1.z + 0.5, 0.5, 0.05, 0.5, 0xfff0c8); gf.add(c1.x, 1.4, c1.z + 0.5, 3, 0xffe8b0, 0.08, 0);
+    const f1 = L.fragment(0, c1.x, 2.0, c1.z - 0.6);
+    const px = G.cx(1), pz = G.cz(7); B.box(px, 1.2, pz, 1.05, 2.4, 1.05, 0x3a5a3a, 1); GB.box(px, 1.4, pz - 0.531, 0.8, 1.6, 0.02, 0xb8f0c0); GB.box(px, 1.4, pz + 0.531, 0.8, 1.6, 0.02, 0xb8f0c0); gf.add(px, 1.6, pz, 2.6, 0xa8f0b8, 0.1, 0); L.collider(px, pz, 0.55, 0.55, 0, 0, 2.4, { noray: true });
+    const f2 = L.fragment(1, px + 1.5, 1.35, pz, { range: 3.2 });
+    car(G.cx(3), 0, G.cz(5) + 0.95, 0, R.pick(cc)); car(G.cx(10), 0, G.cz(7) - 0.95, 0, R.pick(cc)); car(G.cx(4), 0, G.cz(3) - 0.95, 0, R.pick(cc)); car(G.cx(8), 0, G.cz(5) + 0.95, 0, R.pick(cc));
+    for (const [gx, gz] of [[2, 1], [4, 5], [7, 3], [5, 7], [11, 4], [9, 5]]) { B.box(G.cx(gx), 0.32, G.cz(gz) + 1.4, 1.8, 0.64, 0.45, 0x8a8a84, 1); B.box(G.cx(gx), 0.35, G.cz(gz) + 1.4, 1.82, 0.1, 0.47, 0xe8c840, 1); L.box(G.cx(gx) - 0.9, 0, G.cz(gz) + 1.17, G.cx(gx) + 0.9, 0.7, G.cz(gz) + 1.63, { noray: true }); }
+    for (let gz = 1; gz <= 7; gz++) for (let gx = 1; gx <= 12; gx++) if (G.isF(gx, gz) && R() < 0.5) B.box(G.cx(gx) + R.range(-1, 1), 0.01, G.cz(gz) + R.range(-1, 1), 0.1, 0.01, 1.8, 0xe8e0c0, 1);
+    for (let i = 0; i < 6; i++) L.sign(['P1', 'P2', 'P1', 'P3', 'P2', 'P1'][i] + '  ←', G.cx(1 + i * 2) , 2.3, G.Z(1) + 0.03, 1.0, 0.36, { fg: '#e8d078', bg: null, size: 52, cw: 256, yaw: 0, bold: true });
+    // ── the radio: a compass that dims through walls ──
+    const A = AudioSys; let radio = null;
+    if (A.ok) { const ctx = A.ctx, pan = A.panner(rc, 2.6, 0.95), lp = ctx.createBiquadFilter(), rg = ctx.createGain(); lp.type = 'lowpass'; lp.frequency.value = 900; rg.gain.value = 0.9; rg.connect(lp); lp.connect(pan); pan.connect(A.busSfx); radio = { pan, lp, rg }; }
+    const hiss = L.emitter(rc, { type: 'white', filter: 'bandpass', freq: 2400, q: 0.5, gain: 0.05, ref: 2.6, roll: 0.95 });
+    const PROG = [[0, 2, 4, 7], [-3, 0, 2, 4], [-5, -2, 0, 2], [-4, -1, 1, 3]]; let rt = 1.5, rp = 0;
+    L.hint(() => (!f1.got ? f1.g.position : !f2.got ? f2.g.position : !f3.got ? rc : new Vector3(ex, RY + 1.2, TZ1)));
+    L.audio({
+      noise: [{ type: 'brown', filter: 'lowpass', freq: 130, gain: 0.11 }, { type: 'pink', filter: 'bandpass', freq: 700, q: 1.4, gain: 0.02, lfo: { rate: 0.05, depth: 0.012 } }],
+      hum: { f0: 100, harm: [1, 2, 3, 5], gain: 0.012, lp: 900, buzz: 0.25 }, drone: [{ f: 41.2, gain: 0.05, lp: 140, lfo: 0.025 }],
+      events: [{ every: [5, 12], fn: (A2) => { const p = A2.panner({ x: (Math.random() - 0.5) * 60, y: 1, z: (Math.random() - 0.5) * 36 }, 3, 0.8); p.connect(A2.busSfx); A2.drip(p, 0.14); } }, { every: [40, 80], fn: (A2) => { const p = A2.panner({ x: (Math.random() - 0.5) * 80, y: 1.2, z: (Math.random() - 0.5) * 50 }, 3, 0.8); p.connect(A2.busSfx); const t = A2.ctx.currentTime; for (let i = 0; i < 4; i++) A2.voice('square', 1900, t + i * 0.5, 0.005, 0.12, 0.012, A2.busSfx, 0, p); } }],
+    }, { root: 45, scale: 'phrygian', tempo: 40, timbre: 'pad', seed: 99, density: 0.5, vol: 0.5, sparse: 0.5, motif: [4, null, null, 2, null, 0, null, null], bassDeg: [0, -2, -3, -1] });
+    L.onUpdate((dt, t) => {
+      const d = Math.hypot(Head.world.x - rc.x, Head.world.z - rc.z), dy = Math.abs(Head.world.y - rc.y), close = clamp(1 - Math.hypot(d, dy * 1.5) / 34, 0, 1);
+      if (radio) { radio.lp.frequency.value = 500 + 9000 * close * close; radio.rg.gain.value = 0.55 + 0.6 * close; }
+      if (hiss.filter) hiss.filter.frequency.value = 900 + 4500 * close * close;
+      rt -= dt; if (rt <= 0 && A.ok && radio) { rt = 2.4; const ch = PROG[rp++ % 4]; ch.forEach((dg, i) => A.note(degToMidi({ root: 55, scale: 'minor' }, dg), A.ctx.currentTime + i * 0.05, 2.4, 0.42, 'piano', radio.rg)); A.note(degToMidi({ root: 55, scale: 'minor' }, [0, 2, 4, 5, 7][rp % 5] + 7), A.ctx.currentTime + 1.2, 1.4, 0.3, 'piano', radio.rg); }
+    });
+    L.floorFn = (x, z, ref) => {
+      if (x > RAMP.x0 && x < RAMP.x1 && z > RAMP.z0 && z < RAMP.z1) return RY * clamp((RAMP.z1 - z) / (RAMP.z1 - RAMP.z0), 0, 1);
+      return x >= RX0 && x <= RX1 && z >= RZ0 && z <= RZ1 && ref !== undefined && ref > 1.9 ? RY : 0;
+    };
+    L.onDispose(() => { if (radio) { try { radio.pan.disconnect(); radio.lp.disconnect(); radio.rg.disconnect(); } catch (e) { /* */ } } });
+  },
+}]);
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════
+   LEVEL 11 — SKY GARDEN OF DOORS.  Floating islands, a sea of clouds, hundreds of doors standing in the air.
+   Only three doors are real. Each sits in a row of look-alikes on a satellite island: the real one has wind chimes
+   that sing when the wind passes, and a gold mark that only the lantern shows.
+   ═════════════════════════════════════════════════════════════════════════════════════════════ */
+Levels.register([{
+  id: 10, name: 'Sky Garden of Doors',
+  build(L) {
+    L.env({ fog: [0xdfe6f4, 0.0085], hemi: [0xf4f0ff, 0xb8a8c8, 0.85], key: { color: 0xfff0d8, i: 0.9, pos: [80, 120, -60], dist: 0, decay: 0 }, haze: [0xffe0d0, 0.02] });
+    L.fragColor = 0xfff4d8; L.killY = -40;
+    L.sky({ top: 0x4f8ed8, mid: 0xffe2c8, bot: 0xd8d4f4, sun: 0xffe0a8, sunDir: [-0.3, 0.32, -0.9], sunSize: 1.4, cloud: 0.75, cloudCol: 0xffffff, cloudSpeed: 0.004, seed: 13 });
+    const B = L.b('flat'), GB = L.b('glowb'), gf = L.glow(300), R = makeRng(52);
+    const gb = L.builderWith('grass', L.lambert('grassM', L.tex('grassT', () => TEX.grass({ base: '#88b060', seed: 6 }))));
+    // ── islands ──
+    const ISL = [{ x: 0, z: 0, r: 15 }, { x: 0, z: -46, r: 9 }, { x: 46, z: 0, r: 9 }, { x: 0, z: 46, r: 9 }, { x: -46, z: 0, r: 9 }];
+    const gaps = { 0: [0, Math.PI / 2, Math.PI, Math.PI * 1.5], 1: [Math.PI], 2: [Math.PI * 1.5], 3: [0], 4: [Math.PI / 2] };
+    ISL.forEach((s, ii) => {
+      const N = 30, th = 12 + s.r * 0.5;
+      for (let i = 0; i < N; i++) {
+        const a0 = (i / N) * TAU, a1 = ((i + 1) / N) * TAU, p = (a) => [s.x + Math.sin(a) * s.r, 0, s.z - Math.cos(a) * s.r];
+        const P0 = p(a0), P1 = p(a1); gb.tri([s.x, 0, s.z, ...P1, ...P0], [0, 1, 0], [s.x / 5, -s.z / 5, P1[0] / 5, -P1[2] / 5, P0[0] / 5, -P0[2] / 5], 0xffffff, 1);
+        const am = (a0 + a1) / 2; if (gaps[ii].some((g) => Math.abs(wrapPI(am - g)) < Math.atan2(1.9, s.r))) continue;
+        const rr = s.r - 0.3, px = s.x + Math.sin(am) * rr, pz = s.z - Math.cos(am) * rr, len = (TAU * s.r) / N + 0.1;
+        B.push(px, 0.28, pz, -am); B.box(0, 0, 0, len, 0.56, 0.55, 0x5f9a4a, 1); B.pop(); L.collider(px, pz, len / 2 + 0.05, 0.4, -am, -0.5, 2.6, { noray: true });
+      }
+      B.push(s.x, -th / 2 - 0.05, s.z, 0, Math.PI); B.cone(0, 0, 0, s.r * 0.98, th, 22, 0x8a7a6a); B.pop(); B.push(s.x, -th / 2 - 1.2, s.z, 0, Math.PI); B.cone(0, 0, 0, s.r * 0.7, th * 0.7, 16, 0x6a5e52); B.pop();
+    });
+    // ── rope bridges ──
+    const bridge = (x0, z0, x1, z1) => {
+      const dx = x1 - x0, dz = z1 - z0, len = Math.hypot(dx, dz), yaw = Math.atan2(dx, -dz) * 1, ux = dx / len, uz = dz / len; B.push((x0 + x1) / 2, 0, (z0 + z1) / 2, -yaw + Math.PI * 0 + 0);
+      const n = Math.floor(len / 0.5); for (let i = 0; i < n; i++) B.box(0, -0.04, -len / 2 + (i + 0.5) * (len / n), 2.6, 0.08, len / n - 0.06, i % 2 ? 0x8a6a48 : 0x7a5a3a, 1);
+      for (const sg of [-1, 1]) { B.box(sg * 1.3, 1.0, 0, 0.06, 0.06, len, 0xd8c8a0, 1); B.box(sg * 1.3, 0.5, 0, 0.04, 0.04, len, 0xd8c8a0, 1); for (let z = -len / 2; z <= len / 2; z += 2.4) B.box(sg * 1.3, 0.5, z, 0.09, 1.1, 0.09, 0x6a4a2a, 1); }
+      B.pop(); const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, ry = -yaw;
+      for (const sg of [-1, 1]) { const ox = Math.cos(ry) * sg * 1.4, oz = -Math.sin(ry) * sg * 1.4; L.collider(cx + ox, cz + oz, 0.15, len / 2, ry, -1, 2.2, { noray: true }); }
+    };
+    bridge(0, -15, 0, -37); bridge(15, 0, 37, 0); bridge(0, 15, 0, 37); bridge(-15, 0, -37, 0);
+    // ── a cloud sea beneath ──
+    const cloudTex = L.tex('clouds', () => TEX.clouds({ seed: 17 })); const cl = [];
+    for (let i = 0; i < 3; i++) { const t = cloudTex.clone(); t.needsUpdate = true; t.repeat.set(6 - i, 6 - i); const m = new Mesh(L.geo('cloudG', () => new PlaneGeometry(700, 700).rotateX(-Math.PI / 2)), new MeshBasicMaterial({ map: t, transparent: true, opacity: 0.85 - i * 0.18, color: i === 0 ? 0xf8f4ff : 0xe0d8f4, depthWrite: false })); m.position.y = -16 - i * 9; m.renderOrder = -2 + i; L.add(m); cl.push({ t, sp: 0.004 + i * 0.002 }); }
+    // ── hundreds of doors adrift ──
+    const dB = new MeshBuilder(false, true); dB.box(-0.6, 1.1, 0, 0.1, 2.2, 0.16, 0xffffff, 1); dB.box(0.6, 1.1, 0, 0.1, 2.2, 0.16, 0xffffff, 1); dB.box(0, 2.25, 0, 1.3, 0.1, 0.16, 0xffffff, 1); dB.box(0, 1.1, 0, 1.1, 2.2, 0.06, 0xffffff, 1); dB.sphere(0.4, 1.05, 0.06, 0.05, 0xd8b850, 1, 1, 1, 5);
+    const doorGeo = dB.build(new MeshLambertMaterial({ vertexColors: true })).geometry, ND = 320, drift = new InstancedMesh(doorGeo, L.mat('driftM', () => new MeshLambertMaterial({ vertexColors: true })), ND), dd = new Object3D(), dcol = new Color(), doorsA = [];
+    const dcols = [0xb85a4a, 0x4a7ab8, 0x5a9a6a, 0xd8b04a, 0x8a5aa8, 0xe8e0d0, 0xc87a3a, 0x4a4a58, 0xd88aa8];
+    for (let i = 0; i < ND; i++) { const az = R() * TAU, el = R.range(-0.28, 0.6), rr = R.range(48, 150), x = Math.cos(az) * Math.cos(el) * rr, z = Math.sin(az) * Math.cos(el) * rr, y = Math.sin(el) * rr + 6; if (Math.hypot(x, z) < 40 && y < 22 && y > -8) { i--; continue; } doorsA.push({ x, y, z, yaw: az + Math.PI / 2 + R.range(-0.7, 0.7), ph: R() * TAU, sp: R.range(0.15, 0.45), tilt: R.range(-0.12, 0.12) }); dcol.setHex(R.pick(dcols)); drift.setColorAt(i, dcol); }
+    drift.frustumCulled = false; L.add(drift);
+    // ── door rows on the satellite islands ──
+    const OUT = { 1: [0, -1], 2: [1, 0], 3: [0, 1], 4: [-1, 0] }, YAWS = { 1: 0, 2: -Math.PI / 2, 3: Math.PI, 4: Math.PI / 2 }, dCols = [0x9a3a3a, 0x3a5a9a, 0x3a7a5a, 0x9a7a2a, 0x6a3a8a];
+    const realIdx = { 1: R.int(0, 2), 2: R.int(0, 2), 4: R.int(0, 2) }, real = [], chimes = [], frags = [];
+    const rowDoors = (ii, fi) => {
+      const s = ISL[ii], o = OUT[ii], yaw = YAWS[ii], lat = [-o[1] * -1, o[0] * -1]; // lateral direction along the island's row
+      for (let k = 0; k < 3; k++) {
+        const px = s.x + o[0] * 4.2 + lat[0] * (k - 1) * 2.7, pz = s.z + o[1] * 4.2 + lat[1] * (k - 1) * 2.7, isReal = fi !== null && realIdx[ii] === k;
+        const d = L.simpleDoor(px, 0, pz, yaw, { w: 1.15, h: 2.25, color: dCols[(ii + k) % 5], frame: 0xe8dcc0, glow: isReal ? 0xffe8c0 : 0xc8e4ff, label: 'Open', onOpen: (op) => { if (!op) return; if (isReal) { frags[fi].show(true); AudioSys.chord(L.theme, [0, 2, 4, 7], 'glass', 0.4); } else if (fi !== null) toastHook(R.pick(['Only sky, and a little wind.', 'Clouds. Very polite ones.', 'Nothing behind it but afternoon.']), 3); else toastHook('Only sky.', 2.5); } });
+        if (isReal) {
+          const n = [Math.sin(yaw), Math.cos(yaw)]; frags[fi] = L.fragment(fi, px - n[0] * 0.75, 1.3, pz - n[1] * 0.75, { hidden: true }); real.push({ x: px, z: pz, d, fi });
+          L.mark(px, 1.25, pz + n[1] * 0.12 * 0 + n[1] * 0.1, { glyph: 'star', size: 0.9, yaw, c: '#ffe08a', max: 1, range: 9 }).mesh.position.set(px + n[0] * 0.14, 1.25, pz + n[1] * 0.14);
+          const ch = new Group(); ch.position.set(px + lat[0] * 1.55, 2.6, pz + lat[1] * 1.55); const chB = new MeshBuilder(false, true); chB.cyl(0, 0.1, 0, 0.12, 0.12, 0.04, 10, 0xd8b048); for (let q = 0; q < 5; q++) chB.cyl((q - 2) * 0.06, -0.25 - (q % 2) * 0.05, 0, 0.012, 0.012, 0.5 - (q % 3) * 0.08, 5, 0xd8d0c0); ch.add(new Mesh(chB.build(new MeshLambertMaterial({ vertexColors: true })).geometry, L.mat('chimeM', () => new MeshLambertMaterial({ vertexColors: true })))); L.add(ch); B.box(px + lat[0] * 1.55, 2.75, pz + lat[1] * 1.55, 0.05, 0.3, 0.05, 0x6a4a2a, 1);
+          chimes.push({ g: ch, pos: new Vector3(px + lat[0] * 1.55, 2.4, pz + lat[1] * 1.55), t: R.range(1, 4), note: [2, 4, 7][fi], pan: AudioSys.ok ? (() => { const p = AudioSys.panner({ x: px, y: 2.4, z: pz }, 2.2, 0.85); p.connect(AudioSys.busSfx); return p; })() : null, ph: R() * 6 });
+        }
+      }
+    };
+    rowDoors(1, 0); rowDoors(2, 1); rowDoors(4, 2);
+    // the south island: a door labeled HOME that opens both ways
+    { const px = 0, pz = 46 + 3.2; const d = L.simpleDoor(px, 0, pz, Math.PI, { w: 1.15, h: 2.25, color: 0x7a4a2a, frame: 0xf2ead2, glow: 0xffe6c0, label: 'Open', onOpen: (op) => { if (op) L.foundSecret(new Vector3(px, 1.2, pz)); } }); L.sign('HOME', px, 2.75, pz - 0.1, 0.9, 0.32, { fg: '#3a2a18', bg: '#efe2c0', border: '#8a6a3a', size: 56, cw: 384, yaw: Math.PI, double: true }); for (const dx of [-3, 3]) { L.simpleDoor(px + dx * 1.4, 0, pz - 0.3, Math.PI, { w: 1.15, h: 2.25, color: dCols[dx > 0 ? 1 : 3], frame: 0xe8dcc0, glow: 0xc8e4ff, onOpen: (op) => op && toastHook('Only sky.', 2) }); } }
+    // decoys on the main island
+    for (const [x, z, yaw] of [[-5, 8, Math.PI], [6, 9, Math.PI], [-9, -4, Math.PI / 2], [10, -6, -Math.PI / 2]]) L.simpleDoor(x, 0, z, yaw, { w: 1.15, h: 2.25, color: R.pick(dCols), frame: 0xe8dcc0, glow: 0xc8e4ff, onOpen: (op) => op && toastHook(R.pick(['Only sky.', 'A door to somewhere else, or nowhere.']), 2.5) });
+    // ── garden: trees, flowers, benches, the great door ──
+    for (let i = 0; i < 12; i++) { const a = R() * TAU, rr = R.range(5, 13); if (Math.abs(Math.sin(a)) < 0.2 || Math.abs(Math.cos(a)) < 0.2) continue; const x = Math.sin(a) * rr, z = -Math.cos(a) * rr, th = R.range(3, 5); B.cyl(x, th / 2, z, 0.2, 0.28, th, 6, 0x6a4a34); for (let s = 0; s < 3; s++) B.sphere(x + R.range(-0.5, 0.5), th + 0.4 + s * 0.6, z + R.range(-0.5, 0.5), 1.5 - s * 0.3, R.pick([0xf0a8b8, 0xf8c8d0, 0xe898b0]), 1, 0.85, 1, 8); L.box(x - 0.3, 0, z - 0.3, x + 0.3, th, z + 0.3, { noray: true }); }
+    for (let i = 0; i < 260; i++) { const a = R() * TAU, rr = Math.sqrt(R()) * 14, ii = R.int(0, 4); const s = i % 4 === 0 ? ISL[ii] : ISL[0], x = s.x + Math.sin(a) * rr * (s.r / 15), z = s.z - Math.cos(a) * rr * (s.r / 15); gf.add(x, 0.14, z, 0.28, R.pick([0xffd8e8, 0xfff0a8, 0xffffff, 0xd8e8ff, 0xffc0a0]), 0.15, 0); }
+    Props.bench(B, -7, 2, Math.PI / 2, 1.8, { wood: 0x9a8a78, cushion: 0xc8a8c0 }); Props.bench(B, 7, -3, -Math.PI / 2, 1.8, { wood: 0x9a8a78, cushion: 0xc8a8c0 }); L.box(-7.5, 0, 1.1, -6.5, 0.9, 2.9, { noray: true }); L.box(6.5, 0, -3.9, 7.5, 0.9, -2.1, { noray: true });
+    L.exit({ x: 0, y: 0, z: -7, yaw: 0, w: 2.4, h: 4.2, s: 2, color: 0xe8dcc0, frame: 0xf8f0d8, glow: 0xfff8e8 }); B.box(0, 0.1, -7, 5.4, 0.2, 2.2, 0xd8d0c0, 1);
+    L.dust(260, { x0: -40, x1: 40, y0: 0.5, y1: 12, z0: -40, z1: 40 }, 0xffd8e4, 0.1, 0.85, 1.6);
+    L.spawn = { x: 0, y: 0, z: 10, yaw: 0 }; L.bounds = { x0: -58, x1: 58, z0: -58, z1: 58 };
+    L.hint(() => { const r = real.find((q) => !frags[q.fi].got); if (r) return new Vector3(r.x, 1.4, r.z); return null; });
+    L.audio({
+      noise: [{ type: 'pink', filter: 'bandpass', freq: 380, q: 0.6, gain: 0.07, lfo: { rate: 0.07, depth: 0.05, target: 'gain' } }, { type: 'brown', filter: 'lowpass', freq: 220, gain: 0.05 }, { type: 'white', filter: 'highpass', freq: 5000, gain: 0.004, lfo: { rate: 0.11, depth: 0.003 } }],
+      drone: [{ f: 293.7, gain: 0.012, lfo: 0.06 }, { f: 440, gain: 0.006, lfo: 0.09 }],
+      events: [{ every: [4, 9], fn: (A) => { const d = R.pick(doorsA), p = A.panner({ x: d.x, y: d.y + 1, z: d.z }, 5, 0.6); p.connect(A.busSfx); A.chime(mtof(degToMidi({ root: 74, scale: 'pent' }, R.int(0, 4))), 0.05, null, p); } }],
+    }, { root: 62, scale: 'lydian', tempo: 40, timbre: 'glass', seed: 111, density: 0.6, vol: 0.85, sparse: 0.35, motif: [4, null, 5, 4, 2, null, 4, 7] });
+    L.onUpdate((dt, t) => {
+      for (let i = 0; i < ND; i++) { const d = doorsA[i]; dd.position.set(d.x, d.y + Math.sin(t * d.sp + d.ph) * 0.9, d.z); dd.rotation.set(d.tilt * Math.sin(t * 0.2 + d.ph), d.yaw + Math.sin(t * 0.1 + d.ph) * 0.15, d.tilt * Math.cos(t * 0.17 + d.ph)); dd.scale.setScalar(2.4); dd.updateMatrix(); drift.setMatrixAt(i, dd.matrix); }
+      drift.instanceMatrix.needsUpdate = true;
+      cl.forEach((c, i) => { c.t.offset.x += c.sp * dt * 0.1; c.t.offset.y += c.sp * dt * 0.05; });
+      for (const c of chimes) { c.g.rotation.z = Math.sin(t * 1.3 + c.ph) * 0.12 + Math.sin(t * 3.1 + c.ph) * 0.03; c.g.rotation.x = Math.sin(t * 1.1 + c.ph * 1.7) * 0.1; c.t -= dt; if (c.t <= 0 && AudioSys.ok) { c.t = R.range(2.6, 5.5); const f = mtof(degToMidi({ root: 74, scale: 'pent' }, c.note)); AudioSys.chime(f, 0.16, null, c.pan); AudioSys.chime(f * 1.5, 0.08, AudioSys.ctx.currentTime + 0.18, c.pan); } }
+    });
+  },
+}]);
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════
+   LEVEL 12 — THE WAKING ROOM.  The childhood bedroom at its real size, at dawn, with its edges dissolving into
+   morning. Every keepsake you carried out of the other places is lying somewhere in the room. Pull each one (hold
+   TRIGGER) to its silhouette on the shelf; each third of the shelf wakes a memory. When the last memory is kept the
+   door opens, and there is a choice — two last lines, then the credits, then the hub.
+   ═════════════════════════════════════════════════════════════════════════════════════════════ */
+const ENDING_LINES = [
+  null,
+  'I left the door open, so the light could follow me out.',
+  'I closed the door softly, the way she used to, so as not to wake the house.',
+];
+const CREDITS = [
+  ['H A L F - R E M E M B E R E D', 'a game about leaving'],
+  ['Twelve places, thirty-six memories,', 'and one house that was never quite this size.'],
+  ['Made of nothing but light and arithmetic', 'one file, three.js, and a long night'],
+  ['The music box, the rain and the static', 'were all woven from noise and sine waves.'],
+  ['For everyone who has ever had to say goodbye', 'to a room that kept saying it back.'],
+  ['Thank you for staying until morning.', 'The door is always there if you want to come back.'],
+];
+Levels.register([{
+  id: 11, name: 'The Waking Room',
+  onComplete(L) { if (L.ending) L.ending.start(); },
+  build(L) {
+    const RX = 2.1, RZ = 2.5, H = 2.6, own = [], SH = { x: RX - 0.17, z0: 0, rowY: [0.78, 1.2, 1.62], dz: 0.36 };
+    for (let i = 0; i < 11; i++) if (Save.d.keep[i]) own.push(i);
+    const N = own.length, thr = [Math.ceil(N / 3), Math.ceil((2 * N) / 3), N];
+    L.env({ fog: [0xf3ead9, 0.058], hemi: [0xfff6e8, 0xe8dac2, 1.05], key: { color: 0xffd6a0, i: 1.5, pos: [0.9, 1.7, -0.8], dist: 8, decay: 2 }, fill: { color: 0xfff0dc, i: 1.6, pos: [-2.4, 1.5, 1.4], dist: 7, decay: 2 }, haze: [0xfff4e2, 0.05], bg: 0xf3ead9 });
+    L.fragColor = 0xfff2d0; L.stepMax = 0.32; L.theme = { root: 60, scale: 'major' };
+    const fb = L.builderWith('floor', L.lambert('floorM', L.tex('floorT', () => TEX.wood({ base: '#e8d5b2', planks: 7, size: 512, seed: 12 }))));
+    const wb = L.builderWith('wall', L.lambert('wallM', L.tex('wallT', () => TEX.wallpaper({ bg: '#f8f2e4', fg: '#e8decb', style: 'floral', wear: 0.3, seed: 8 }))));
+    const cb = L.builderWith('ceil', L.lambert('ceilM', L.tex('ceilT', () => TEX.plaster({ base: '#f2ecdf', seed: 3, cracks: 0 }))));
+    const B = L.b('flat'), GB = L.b('glowb'), gf = L.glow(120);
+    fb.flat(-RX, -RZ, RX, RZ, 0, 0xffffff, 2, true); cb.flat(-RX, -RZ, RX, RZ, H, 0xffffff, 2, false);
+    wb.wall(-RX, -RZ, RX, -RZ, 0, H, 0, 1, 0xffffff, 1.6, 0); wb.wall(RX, -RZ, RX, RZ, 0, H, -1, 0, 0xffffff, 1.6, 0); wb.wall(-RX, RZ, RX, RZ, 0, H, 0, -1, 0xffffff, 1.6, 0);
+    const DZ = 1.4; L.doorway(-RX, DZ, Math.PI / 2, { cs: 2 * (RZ - DZ), wallH: H, w: 0.95, h: 2.15, wb, wuv: 1.6 }); wb.wall(-RX, -RZ, -RX, DZ - (RZ - DZ), 0, H, 1, 0, 0xffffff, 1.6, 0);
+    L.box(-RX - 3, -3, -RZ - 3, RX + 3, H, -RZ); L.box(RX, -3, -RZ, RX + 3, H, RZ); L.box(-RX - 3, -3, RZ, RX + 3, H, RZ + 3); L.box(-RX - 3, -3, -RZ, -RX, H, RZ);
+    // baseboards + a faint picture rail
+    const bb = 0xf6f0e4; B.box(0, 0.06, -RZ + 0.012, 2 * RX, 0.12, 0.024, bb, 2); B.box(0, 0.06, RZ - 0.012, 2 * RX, 0.12, 0.024, bb, 2); B.box(RX - 0.012, 0.06, 0, 0.024, 0.12, 2 * RZ, bb, 2); B.box(-RX + 0.012, 0.06, -0.8, 0.024, 0.12, 3.4, bb, 2); B.box(-RX + 0.012, 0.06, 2.2, 0.024, 0.12, 0.6, bb, 2);
+    // ── the window (north wall) and the dawn beyond ──
+    const WX = 0.9; GB.box(WX, 1.42, -RZ + 0.006, 0.9, 1.05, 0.012, 0xfff6e4);
+    for (const [dx, dy, sx, sy] of [[0, 1.96, 1.04, 0.06], [0, 0.88, 1.04, 0.06], [-0.5, 1.42, 0.06, 1.16], [0.5, 1.42, 0.06, 1.16], [0, 1.42, 0.03, 1.05], [0, 1.42, 0.9, 0.03]]) B.box(WX + dx, dy, -RZ + 0.03, sx, sy, 0.05, 0xfbf6ea, 1);
+    B.box(WX, 0.84, -RZ + 0.1, 1.12, 0.04, 0.2, 0xfbf6ea, 1); B.box(WX, 2.16, -RZ + 0.09, 1.7, 0.026, 0.026, 0x8a6a48, 1);
+    gf.add(WX, 1.42, -RZ + 0.3, 2.3, 0xfff2d8, 0.03, 0);
+    // ── bed, nightstand, lamp ──
+    const wood = 0xc9a878, dk = 0x9a7a52;
+    B.box(0.9, 0.2, -1.5, 1.04, 0.05, 2.04, wood, 1); for (const sx of [-1, 1]) for (const sz of [-1, 1]) B.box(0.9 + sx * 0.5, 0.1, -1.5 + sz * 1.0, 0.06, 0.2, 0.06, dk, 1);
+    B.box(0.9, 0.62, -2.47, 1.04, 0.62, 0.05, wood, 1); B.box(0.9, 0.36, -1.5, 0.98, 0.22, 1.94, 0xf4eee0, 1); B.box(0.9, 0.47, -1.0, 1.0, 0.06, 1.3, 0xd4dcec, 1); B.box(0.9, 0.5, -0.36, 1.0, 0.02, 0.07, 0xfbf7ee, 1); B.box(0.9, 0.5, -2.16, 0.62, 0.11, 0.36, 0xfffaf0, 1);
+    B.box(0.15, 0.24, -2.22, 0.36, 0.48, 0.34, wood, 1); B.box(0.15, 0.5, -2.22, 0.4, 0.03, 0.38, dk, 1); B.cyl(0.15, 0.54, -2.22, 0.03, 0.05, 0.06, 8, 0xd8c8a8); GB.cyl(0.15, 0.68, -2.22, 0.09, 0.14, 0.2, 10, 0xffe2b0, 0, true); gf.add(0.15, 0.7, -2.22, 0.8, 0xffcf90, 0.05, 0);
+    L.box(0.35, 0, -2.5, 1.45, 0.5, -0.5); L.box(-0.03, 0, -2.4, 0.33, 0.5, -2.04);
+    // ── desk + chair (west wall), toy chest, rug, keepsake-less shelf of books ──
+    Props.table(B, -1.83, -1.22, 0.54, 1.1, 0.72, 0, { top: 0xd2b88e, leg: 0x9a7a52 }); Props.chair(B, -1.16, -1.22, -Math.PI / 2, { seat: 0x9ab0d0, wood: 0xc9a878 });
+    B.box(-1.9, 0.76, -1.5, 0.14, 0.09, 0.2, 0xe8a49c, 1); B.box(-1.75, 0.75, -0.95, 0.22, 0.04, 0.3, 0xfbf6e8, 1); GB.sphere(-2.0, 0.85, -0.78, 0.045, 0xffe6b0, 1, 1, 1, 6);
+    L.box(-RX, 0, -1.77, -1.56, 0.72, -0.67);
+    B.box(-0.5, 0.26, 2.27, 0.7, 0.52, 0.42, 0xb8a6d0, 1); B.box(-0.5, 0.54, 2.26, 0.72, 0.05, 0.44, 0xe6c86a, 1); L.box(-0.86, 0, 2.06, -0.14, 0.54, 2.48);
+    B.cyl(-0.6, 0.004, 0.6, 0.86, 0.86, 0.008, 28, 0xd9c2b0); B.cyl(-0.6, 0.008, 0.6, 0.62, 0.62, 0.008, 28, 0xf0e2c4); B.cyl(-0.6, 0.012, 0.6, 0.4, 0.4, 0.008, 28, 0xd9c2b0);
+    Props.shelf(B, -1.98, 2.27, Math.PI / 2, 0.44, 1.5, 0.22, { rows: 4, seed: 9 }); L.box(-RX, 0, 2.03, -1.86, 1.5, 2.5);
+    // ── the wardrobe, pulled out from the corner — with a small light behind it ──
+    const WD = 0xd6bb8a; B.box(1.45, 1.0, 1.685, 0.5, 2.0, 1.47, WD, 1); B.box(1.195, 1.0, 1.685, 0.012, 1.9, 0.02, 0x8a6a48, 1); B.sphere(1.19, 1.0, 1.58, 0.02, 0xd9b968, 1, 1, 1, 5); B.sphere(1.19, 1.0, 1.79, 0.02, 0xd9b968, 1, 1, 1, 5);
+    L.box(1.2, 0, 0.95, 1.7, 2.0, 2.42);
+    // ── the keepsake shelf (east wall): 3 boards, 4 places each ──
+    const SHW = 1.6; B.box(RX - 0.02, 1.25, SH.z0, 0.04, 1.3, SHW, 0xe9dcc0, 1); for (const y of SH.rowY) B.box(RX - 0.13, y - 0.02, SH.z0, 0.22, 0.03, SHW, wood, 1); B.box(RX - 0.13, 1.885, SH.z0, 0.22, 0.03, SHW, wood, 1); for (const s of [-1, 1]) B.box(RX - 0.13, 1.25, SH.z0 + s * (SHW / 2 - 0.015), 0.22, 1.3, 0.03, wood, 1);
+    // ── curtains that breathe, crayon drawings, a sun on the wall ──
+    const curtains = [], cm = L.mat('curtM', () => new MeshLambertMaterial({ color: 0xf1e8f4, side: DoubleSide, transparent: true, opacity: 0.85 }));
+    for (const cx of [WX - 0.7, WX + 0.7]) { const g = new PlaneGeometry(0.5, 1.9, 4, 10); const m = new Mesh(g, cm); m.position.set(cx, 1.2, -RZ + 0.16); L.add(m); curtains.push({ g, m, base: Float32Array.from(g.attributes.position.array), ph: cx }); }
+    const DRW = L.builderWith('draw', L.mat('drawM', () => new MeshBasicMaterial({ map: L.tex('drawings', () => TEX.drawings({ seed: 51 })), vertexColors: true })), false, false), r = makeRng(12);
+    for (let i = 0; i < 7; i++) { const col = i % 4, row = (i >> 2) % 4, u0 = col / 4, v1 = 1 - row / 4, z = -2.2 + i * 0.2 + (i > 3 ? 0.4 : 0), y = 1.25 + r.range(-0.2, 0.3), s = 0.16; DRW.quad([-RX + 0.006, y - s, z + s, -RX + 0.006, y - s, z - s, -RX + 0.006, y + s, z - s, -RX + 0.006, y + s, z + s], [1, 0, 0], [u0, v1 - 0.25, u0 + 0.25, v1 - 0.25, u0 + 0.25, v1, u0, v1], 0xf4f0e8, 1); }
+    // ── everything that has already dissolved: floating motes, light shafts, a white haze at the corners ──
+    L.dust(170, { x0: -RX + 0.3, x1: RX - 0.3, y0: 0.1, y1: 2.5, z0: -RZ + 0.3, z1: RZ - 0.3 }, 0xfff6e2, 0.03, 0.55, 0.22);
+    L.ray(WX, 1.95, -RZ + 0.14, 0.8, 2.9, 0xfff0d0, 0.11, { tx: -0.55, wb: 1.4 });
+    for (const [gx, gz] of [[-RX + 0.15, -RZ + 0.15], [RX - 0.15, -RZ + 0.15], [-RX + 0.15, RZ - 0.15]]) gf.add(gx, 1.3, gz, 1.8, 0xffffff, 0.02, 0);
+    // ── the door and the hallway beyond it ──
+    L.glowCell(-RX - 5, DZ - 0.7, -RX - 0.05, DZ + 0.7, 0, 2.6, 'e', 0xfff4e2); gf.add(-RX - 0.5, 1.1, DZ, 2.6, 0xffeccc, 0.05, 0);
+    L.box(-RX - 5, -2, DZ - 0.72, -RX, 4, DZ + 0.72, { noray: true });
+    const ex = L.exit({ x: -RX, z: DZ, yaw: Math.PI / 2, w: 0.95, h: 2.15, color: 0xd6bb8a, frame: 0xf3ecdc, glow: 0xfff6e8, lockedMsg: () => (L.got.every(Boolean) ? 'Something is still undone.' : N && placed() < N ? 'The shelf is not finished. Each keepsake has its own place.' : `Memories ${L.got.filter(Boolean).length} of 3. The door is waiting.`) });
+    // ── the secret: a small light at the far end of the gap behind the wardrobe ──
+    gf.add(1.9, 0.98, 2.32, 0.55, 0xffdd99, 0.04, 0); gf.add(1.9, 0.98, 2.4, 0.22, 0xffffff, 0.02, 0);
+    L.secret({ x: 1.9, y: 0.98, z: 2.485, glyph: 'star', yaw: Math.PI, size: 0.24, r: 0.24, c: '#fff0b0', range: 8 });
+    L.bounds = { x0: -RX + 0.45, x1: RX - 0.3, z0: -RZ + 0.5, z1: RZ - 0.4 };
+    L.spawn = { x: -1.35, y: 0, z: DZ, yaw: -Math.PI / 2 };
+    // ═══ slots, silhouettes, keepsakes ═══
+    const slotPos = (i) => new Vector3(SH.x, SH.rowY[Math.floor(i / 4)] + 0.1, SH.z0 + ((i % 4) - 1.5) * SH.dz);
+    const ghostMat = L.mat('ghostM', () => new MeshBasicMaterial({ vertexColors: true, color: 0x8a8272, transparent: true, opacity: 0.38, depthWrite: false }));
+    const slots = [], bodies = [], kMat = L.mat('kHalo', () => new SpriteMaterial({ map: L.tex('glow', () => TEX.glow()), color: 0xfff0c8, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0.55 }));
+    const start = { 0: [-1.83, 0.72, -1.25], 1: [-0.1, 0, 1.55], 2: [0.62, 0.5, -2.3], 3: [-0.7, 0, 0.45], 4: [-1.0, 0, -0.7], 5: [1.05, 0.5, -1.15], 6: [-1.5, 0, -0.1], 7: [-0.5, 0.54, 2.26], 8: [-0.05, 0, -1.3], 9: [-1.55, 0, 2.05], 10: [1.15, 0.5, -0.8] };
+    for (let i = 0; i < 12; i++) {
+      const p = slotPos(i), gm = makeKeepsake(i, 1.5); gm.material.dispose(); gm.material = ghostMat; gm.position.copy(p); gm.rotation.y = -Math.PI / 2; L.add(gm);
+      if (i < 11) {
+        const s = L.slot(p, 0.55, (b) => b.tag === i, (b) => { gm.visible = false; b.obj.rotation.set(0, -Math.PI / 2, 0); onPlaced(i); }, () => { gm.visible = true; });
+        s.gm = gm; slots[i] = s;
+        if (Save.d.keep[i]) {
+          const m = makeKeepsake(i, 1.5), st = start[i]; m.position.set(st[0], st[1] + 0.1, st[2]); L.add(m);
+          const h = new Sprite(kMat); h.scale.setScalar(0.42); m.add(h);
+          const b = L.body(m, [0.1, 0.1, 0.1], { hold: 0.85, label: 'Hold to pull', pickHalf: [0.2, 0.2, 0.2], range: 9, loud: 0.5, bounce: 0.1, tag: i }); b.halo = h; bodies.push(b);
+        }
+      }
+    }
+    // the twelfth keepsake is yours: it rests on the last place of the shelf only at the very end
+    const twelve = makeKeepsake(11, 1.5); twelve.position.copy(slotPos(11)); twelve.rotation.y = -Math.PI / 2; twelve.visible = false; L.add(twelve);
+    const tHalo = new Sprite(new SpriteMaterial({ map: L.tex('glow', () => TEX.glow()), color: 0xfff0c0, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0 })); tHalo.position.copy(slotPos(11)); tHalo.scale.setScalar(0.6); L.add(tHalo);
+        const placed = () => slots.filter((s) => s && s.body && !s.body.held).length;
+    // ═══ memories: each third of the shelf wakes one ═══
+    const fr = [
+      L.fragment(0, 0.9, 0.86, -2.02, { hidden: N > 0, range: 4 }),
+      L.fragment(1, -1.7, 1.05, -0.95, { hidden: N > 0, range: 4 }),
+      L.fragment(2, -1.75, 1.3, DZ + 0.75, { hidden: N > 0, range: 4 }),
+    ];
+    const shown = [N === 0, N === 0, N === 0];
+    function onPlaced(i) {
+      L.progress(); AudioSys.chord(L.theme, [0, 4, 7 + (placed() % 4)], 'glass', 0.25, 0.08); L.burst(slotPos(i), 0xffe6b0, 14, 0.7);
+      const n = placed();
+      for (let k = 0; k < 3; k++) if (!shown[k] && n >= thr[k]) { shown[k] = true; setTimeout(() => { if (Levels.cur === L) { fr[k].show(true); toastHook(['A memory stirs on the pillow.', 'Something is waiting by the desk.', 'The last one is by the door.'][k], 4.5); } }, 900); }
+      if (n >= N && N > 0) setTimeout(() => { if (Levels.cur === L) toastHook('Every keepsake is home.', 3.5); }, 700);
+    }
+    L.hint(() => {
+      for (const f of fr) if (f.visible && !f.got) return f.g.position;
+      const free = bodies.find((b) => !b.snapped && !b.held);
+      if (free) return free.pos; const held = bodies.find((b) => b.held); if (held) return slots[held.tag].pos;
+      return null;
+    });
+    // ═══ the ending ═══
+    L.ending = {
+      phase: 'idle', t: 0, choice: 0, card: -1, panel: null, cardMesh: null, cardTex: null, cardG: null, cardA: 0, cardHalo: null, swell: 0,
+      start() {
+        const E = this; if (E.phase !== 'idle') return; E.phase = 'wait'; E.t = 0; L.frozen = true;
+        const P = E.panel = L.panel(900, 470, 1.28, 0.668, { order: 3 });
+        P.clear(); P.text(450, 34, 'THE DOOR IS OPEN', { size: 30, color: UI_COL.gold, align: 'center', bold: true });
+        P.text(450, 92, 'The house is quiet. The light is on in the hall.\nIt is almost morning.', { size: 30, align: 'center', italic: true, lh: 40 });
+        P.text(450, 200, 'What will you do with the door?', { size: 34, align: 'center', bold: true });
+        P.button(60, 268, 780, 76, 'Leave the door open', () => E.choose(1), { size: 32 });
+        P.button(60, 362, 780, 76, 'Close the door softly', () => E.choose(2), { size: 32 });
+      },
+      choose(c) {
+        const E = this; if (E.phase !== 'choose') return; E.choice = c; E.phase = 'last'; E.t = 0; Save.d.ending = c; Save.mark(); Save.flush();
+        E.panel.hide(); const d = ex.door;
+        if (c === 1) { if (!d.isOpen) d.open(true); AudioSys.chord(L.theme, [0, 4, 7, 11, 14, 16], 'glass', 0.45, 0.14); }
+        else { d.open(false); setTimeout(() => AudioSys.thud(0.25), 500); AudioSys.chord(L.theme, [0, 2, 4, 7, 9], 'glass', 0.35, 0.16); }
+        Mem.show(11, 0, ENDING_LINES[c], 'HALF-REMEMBERED  ·  the last line');
+        twelve.visible = true; Music.paused = false;
+      },
+      makeCard() {
+        const c = document.createElement('canvas'); c.width = 1024; c.height = 300; this.cardG = c.getContext('2d');
+        this.cardTex = new CanvasTexture(c); this.cardTex.colorSpace = SRGBColorSpace; this.cardTex.minFilter = LinearFilter; this.cardTex.generateMipmaps = false;
+        this.cardMesh = new Mesh(new PlaneGeometry(1.7, 0.498), new MeshBasicMaterial({ map: this.cardTex, transparent: true, opacity: 0, depthWrite: false, fog: false })); this.cardMesh.renderOrder = 8; this.cardMesh.visible = false; L.add(this.cardMesh);
+        this.cardHalo = new Sprite(new SpriteMaterial({ map: L.tex('glow', () => TEX.glow()), color: 0xfff2d0, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0, fog: false })); this.cardHalo.scale.set(3.4, 1.5, 1); this.cardHalo.renderOrder = 7; L.add(this.cardHalo);
+        const o = Head.world, d = Head.flat; let dist = 1.9; const wall = Levels.rayBlockedT(o, d, 2.4); if (wall < 2.4) dist = Math.max(0.9, wall - 0.4);
+        this.cardMesh.position.set(o.x + d.x * dist, Math.max(1.35, Math.min(1.75, o.y - 0.05)), o.z + d.z * dist); this.cardMesh.lookAt(o.x, this.cardMesh.position.y, o.z); this.cardHalo.position.copy(this.cardMesh.position).addScaledVector(d, 0.1);
+      },
+      drawCard(k) {
+        const g = this.cardG, w = 1024, h = 300, lines = CREDITS[k]; g.clearRect(0, 0, w, h);
+        rrect(g, 10, 10, w - 20, h - 20, 26); g.fillStyle = 'rgba(250,243,226,0.94)'; g.fill(); g.strokeStyle = 'rgba(190,150,90,.6)'; g.lineWidth = 3; g.stroke();
+        g.fillStyle = '#3c281a'; g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.font = (k === 0 ? '600 52px' : 'italic 600 44px') + ' Georgia, serif'; g.fillText(lines[0], w / 2, h * 0.38, w - 90);
+        g.font = 'italic 36px Georgia, serif'; g.fillStyle = '#6a4a30'; g.fillText(lines[1], w / 2, h * 0.68, w - 90); this.cardTex.needsUpdate = true;
+      },
+      update(dt, t) {
+        const E = this; if (E.phase === 'idle') return; E.t += dt;
+        const flash = Save.s.flash !== false, sw = E.phase === 'credits' || E.phase === 'last' || E.phase === 'out' ? 1 : 0;
+        E.swell = damp(E.swell, sw, 0.3, dt); Fade.setHaze(0xfff4e2, 0.05 + E.swell * (flash ? 0.22 : 0.08));
+        if (E.phase === 'wait') { if (E.t > 0.6) { E.phase = 'choose'; E.t = 0; E.panel.show(1.5, -0.05); Music.paused = false; } }
+        else if (E.phase === 'last') {
+          tHalo.material.opacity = damp(tHalo.material.opacity, 0.85, 0.7, dt); twelve.position.y = slotPos(11).y + Math.sin(t * 1.6) * 0.012;
+          if (E.t > 13) { E.phase = 'credits'; E.t = 0; E.card = -1; E.makeCard(); }
+        } else if (E.phase === 'credits') {
+          tHalo.material.opacity = 0.7 + 0.15 * Math.sin(t * 1.6);
+          const CT = 6.4, k = Math.floor(E.t / CT), lt = E.t - k * CT;
+          if (k >= CREDITS.length) { E.phase = 'out'; E.t = 0; E.cardMesh.visible = false; E.cardHalo.material.opacity = 0; return; }
+          if (k !== E.card) { E.card = k; E.drawCard(k); AudioSys.chime(mtof(degToMidi(L.theme, [4, 7, 9, 11, 7, 12][k % 6])), 0.16); }
+          const a = Math.min(1, lt / 1.2) * Math.min(1, (CT - lt) / 1.2); E.cardMesh.visible = a > 0.01; E.cardMesh.material.opacity = a; E.cardHalo.material.opacity = a * 0.3;
+          E.cardMesh.position.y += Math.sin(t * 0.8) * 0.0002;
+        } else if (E.phase === 'out') {
+          if (E.t > 1.2 && Trans.phase === 'idle' && Levels.cur === L) { E.phase = 'done'; Trans.start('hub', { white: true, dur: 3.2 }); }
+        }
+      },
+    };
+    L.onUpdate((dt, t) => L.ending.update(dt, t));
+    // ═══ every-frame details ═══
+    L.onUpdate((dt, t) => {
+      for (const c of curtains) { const p = c.g.attributes.position, b = c.base; for (let i = 0; i < p.count; i++) { const y = b[i * 3 + 1], k = 1 - (y + 0.95) / 1.9; p.setX(i, b[i * 3] + Math.sin(t * 0.7 + y * 1.3 + c.ph) * 0.05 * (0.3 + k * 0.7)); p.setZ(i, b[i * 3 + 2] + Math.sin(t * 0.9 + y * 0.9 + c.ph) * 0.04 * (0.3 + k * 0.7)); } p.needsUpdate = true; }
+      kMat.opacity = 0.5 + 0.18 * Math.sin(t * 2);
+      for (const s of slots) if (s && s.gm) s.gm.visible = !s.body;
+    });
+    L.audio({
+      noise: [{ type: 'brown', filter: 'lowpass', freq: 160, gain: 0.06 }, { type: 'pink', filter: 'bandpass', freq: 2300, q: 0.8, gain: 0.006, lfo: { rate: 0.08, depth: 0.004 } }, { type: 'white', filter: 'bandpass', freq: 4200, q: 6, gain: 0.003, lfo: { rate: 0.2, depth: 0.002 } }],
+      drone: [{ f: 65.4, gain: 0.02, lp: 220, lfo: 0.03 }, { f: 98, gain: 0.012, lp: 300, lfo: 0.021 }],
+      events: [{ every: [7, 15], fn: (A) => A.chirp(0.03) }, { every: [40, 80], fn: (A) => { A.chime(660, 0.03); setTimeout(() => A.chime(784, 0.03), 500); } }],
+    }, { root: 60, scale: 'major', tempo: 34, timbre: 'piano', seed: 71, density: 0.9, vol: 0.95, sparse: 0.15, motif: [4, 2, 0, 2, 4, 4, 4, null] });
+    if (Save.s.flash) setTimeout(() => { if (Levels.cur === L) toastHook('A soft, bright light waits at the end. Softer in Journal › Comfort.', 6); }, 2500);
   },
 }]);
 
